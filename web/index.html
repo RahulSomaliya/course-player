@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Course Player</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23c24700'/%3E%3Cpath d='M12 9.5v13l11-6.5z' fill='%23fefbf8'/%3E%3C/svg%3E"
+    />
+    <script>
+      // Apply the saved theme before first paint so a dark-mode learner never sees a white flash.
+      // Mirrors web/src/state/theme.ts (key "cp:theme"); the progress prefs.theme stays the source of truth.
+      try {
+        var t = localStorage.getItem('cp:theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {
+        /* private window: follow the OS */
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

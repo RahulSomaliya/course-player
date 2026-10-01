@@ -1,0 +1,34 @@
+{ "title": "Course Player QA", "subtitle": "Deployed build on the SSD, checked in headless Chrome at 1440 and 390, light and dark.",
+  "meta": {"Build": "0.1.0+202610010832", "Tests": "225 passed · tsc · vite build", "Chrome": "84/84 checks · 0 console errors", "Date": "1 Oct 2026"},
+  "groups": [
+    {"name": "Start", "shots": [
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final-b/who-1440-light.png", "caption": "Who's studying? — one tap picks your profile", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final-b/home-fresh-1440-light.png", "caption": "First open: one action, Start the course", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final-b/home-fresh-390-dark.png", "caption": "Same on a phone-width window, dark", "check": "pass"}]},
+    {"name": "Home with progress", "shots": [
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final/home-1440-light.png", "caption": "Continue, today, streak, % done, time left, last 30 days", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final/home-1440-dark.png", "caption": "Dark theme", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final/home-390-dark.png", "caption": "390 px, no sideways scroll", "check": "pass"}]},
+    {"name": "Player", "shots": [
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final-b/watch-chrome-1440-light.png", "caption": "Watch page: player, details, course content", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final/theatre-1440-dark.png", "caption": "Theatre mode (T)", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final-b/seek-hover-1440-light.png", "caption": "Seek bar: hover time + buffered range", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final/speed-menu-390-dark.png", "caption": "Speed + autoplay, fits a small player", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final/up-next-1440-dark.png", "caption": "Up next with a 5 s countdown", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final/ended-after-cancel-1440-light.png", "caption": "After Cancel: Replay or Next lecture", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final-b/shortcuts-1440-light.png", "caption": "? shows every keyboard shortcut", "check": "pass"}]},
+    {"name": "Reading", "shots": [
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final/article-1440-dark.png", "caption": "Article lecture in a reading column", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final/article-390-light.png", "caption": "Article at 390 px", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final-b/pdf-resource-1440-light.png", "caption": "Theory slides PDF opens inside the app", "check": "pass"}]},
+    {"name": "Mansi + JS Journey", "shots": [
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/web-agent/mansi-home-pace-1440-light.png", "caption": "Plan strip: pace, week, goal, coach note", "check": "warn", "note": "Earlier build; JS Journey answers were mocked. Real link-up after you deploy JS Journey."},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/web-agent/mansi-home-onBreak-1440-dark.png", "caption": "During the Diwali break: no pace lost", "check": "warn", "note": "Mocked dates in this shot."},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/web-agent/mansi-wrapup-1440-light.png", "caption": "End of session: mood + note, one tap to send", "check": "warn", "note": "Mocked JS Journey."},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/web-agent/mansi-menu-1440-light.png", "caption": "Avatar menu: switch profile, theme, Connect JS Journey", "check": "pass"}]},
+    {"name": "Quit and failures", "shots": [
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final/quit-confirm-1440-light.png", "caption": "Quit asks once, progress is saved", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/final/stopped-390-dark.png", "caption": "Stopped: how to start again", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/web-agent/fail-not-running-1440-light.png", "caption": "App not running: what to double-click", "check": "pass"},
+      {"file": "/Users/rahulsomaliya/Developer/course-player/qa/out/web-agent/fail-video-390-dark.png", "caption": "Video can't be read: is the SSD connected?", "check": "pass"}]}
+  ]}

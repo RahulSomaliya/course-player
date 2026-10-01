@@ -1,0 +1,6 @@
+node_modules
+dist
+vendor/node-darwin-*
+.DS_Store
+qa/out
+qa/*.html

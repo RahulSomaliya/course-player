@@ -1,0 +1,8 @@
+{
+  "title": "The Ultimate React Course",
+  "subtitle": "Jonas Schmedtmann · 2023",
+  "profiles": [
+    { "id": "rahul", "name": "Rahul" },
+    { "id": "mansi", "name": "Mansi" }
+  ]
+}
