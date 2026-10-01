@@ -58,7 +58,7 @@ export function keyToAction(e: KeyLike): PlayerAction | null {
 
 const NON_TEXT_INPUTS = new Set(['range', 'checkbox', 'radio', 'button', 'submit', 'reset', 'color', 'file', 'image']);
 
-/** Player keys are ignored while the learner types (the JS Journey link, the wrap-up note…). */
+/** Player keys are ignored while the learner types (the JS Journey link, the sign-off note…). */
 export function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable || target.closest('[contenteditable]:not([contenteditable="false"])') !== null) return true;

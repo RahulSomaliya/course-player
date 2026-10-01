@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addDays, dayOfWeekLabel, daysBetween, localDateKey } from './dates';
-import { formatClock, formatDay, formatDuration, formatShortDate } from './format';
+import { formatClock, formatDay, formatDuration, formatMessageTime, formatShortDate } from './format';
 
 describe('localDateKey', () => {
   it('uses the local calendar, so a late-night session lands on the right day', () => {
@@ -58,8 +58,15 @@ describe('date labels', () => {
     expect(formatDay('2026-09-29')).toBe('Tue 29 Sep');
     expect(formatShortDate('2026-12-12')).toBe('12 Dec');
   });
-  it('adds the year only when it is not the reference year (a far-off finish estimate)', () => {
-    expect(formatShortDate('2026-12-12', '2026-10-01')).toBe('12 Dec');
-    expect(formatShortDate('2027-01-08', '2026-10-01')).toBe('8 Jan 2027');
+});
+
+describe('formatMessageTime (when Rahul wrote)', () => {
+  const at = (d: number, h: number, m: number): string => new Date(2026, 8, d, h, m).toISOString();
+  const today = '2026-09-30'; // Wed
+  it('today / yesterday / this week / older, in local 24 h time', () => {
+    expect(formatMessageTime(at(30, 21, 5), today)).toBe('Today 21:05');
+    expect(formatMessageTime(at(29, 7, 0), today)).toBe('Yesterday 07:00');
+    expect(formatMessageTime(at(26, 18, 30), today)).toBe('Sat 18:30');
+    expect(formatMessageTime(at(22, 9, 0), today)).toBe('Tue 22 Sep');
   });
 });

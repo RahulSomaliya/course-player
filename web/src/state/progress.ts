@@ -64,6 +64,9 @@ export class ProgressStore {
 
   get = (): ProgressState => this.state;
 
+  /** true once the boot read of the SSD copy settled — before that the state may still be replaced */
+  isHydrated = (): boolean => this.hydrated;
+
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);

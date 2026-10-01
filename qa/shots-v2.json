@@ -1,0 +1,188 @@
+{
+ "title": "Coaching Loop QA",
+ "subtitle": "Mansi’s course app (installed on the SSD, talking to a stand-in JS Journey) and the redesigned JS Journey pages (rendered from test data).",
+ "meta": {
+  "App build": "0.1.0+202610011137",
+  "Tests": "361 app · 331 JS Journey",
+  "Chrome": "app 337/349 checks (the 12 misses = 2 outdated checks × 6 runs) · JS Journey 36/36 page loads, 0 errors",
+  "Date": "1 Oct 2026"
+ },
+ "groups": [
+  {
+   "name": "Mansi's home",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/home-1440-light.png",
+     "caption": "Rahul first, then Continue, This week, stats, her updates, course content",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/home-390-dark.png",
+     "caption": "Same on a phone-width window, dark",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/got-it-ack-1440-light.png",
+     "caption": "Got it: Rahul’s notes are marked read",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/home-fresh-1440-dark.png",
+     "caption": "First open, before any study",
+     "check": "pass"
+    }
+   ]
+  },
+  {
+   "name": "Sign off = an update for Rahul",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/signoff-filled-1440-light.png",
+     "caption": "Time and lectures filled in for her; she adds a note, mood, stuck",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/signoff-sent-1440-dark.png",
+     "caption": "Sent",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/signoff-pending-390-light.png",
+     "caption": "Left without signing off: asked again on next open",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/quit-signoff-1440-dark.png",
+     "caption": "Quit signs off first",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/header-live-1440-light.png",
+     "caption": "Sign off shows the live session time",
+     "check": "pass"
+    }
+   ]
+  },
+  {
+   "name": "Course content",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/content-1440-dark.png",
+     "caption": "Closed sections: title and a quiet tick only",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/content-hover-1440-light.png",
+     "caption": "Length (and due date) on hover",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/content-open-1440-dark.png",
+     "caption": "Lectures only when a section is open; due date on hers",
+     "check": "pass"
+    }
+   ]
+  },
+  {
+   "name": "Watching",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/watch-1440-dark.png",
+     "caption": "Sidebar shows only her section, with its due date",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/watch-step-1440-light.png",
+     "caption": "‹ › steps to the next section",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/watch-390-dark.png",
+     "caption": "Watch on a phone-width window",
+     "check": "pass"
+    }
+   ]
+  },
+  {
+   "name": "Motion (frames caught mid-move)",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/morph-mid-1440-light.png",
+     "caption": "Continue picture growing into the player",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/home-countup-mid-1440-light.png",
+     "caption": "Numbers counting up, bars rising",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/home-1440-light-reduced.png",
+     "caption": "Reduce motion on: everything still, final state",
+     "check": "pass"
+    }
+   ]
+  },
+  {
+   "name": "Her history",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/updates-1440-light.png",
+     "caption": "All her updates with Rahul’s replies",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v2-final/diwali-1440-dark.png",
+     "caption": "During Diwali: break shown, no pace lost",
+     "check": "pass"
+    }
+   ]
+  },
+  {
+   "name": "Your coach page (JS Journey /r)",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/js-journey/qa-out/v2-fixes/coach-typical-1440-light-top.png",
+     "caption": "Unread updates on top, reply right there; stuck is flagged",
+     "check": "warn",
+     "note": "Rendered from test data, not the live database (prod is not migrated yet)."
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/js-journey/qa-out/v2-fixes/coach-typical-1440-dark-full.png",
+     "caption": "Then her stats, plan, and the read history",
+     "check": "warn",
+     "note": "Test data."
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/js-journey/qa-out/v2-fixes/coach-behind-390-light-top.png",
+     "caption": "When she goes quiet: a nudge and “Send her a note”",
+     "check": "warn",
+     "note": "Test data."
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/js-journey/qa-out/v2-fixes/coach-diwali-1440-light-top.png",
+     "caption": "Diwali week",
+     "check": "warn",
+     "note": "Test data."
+    }
+   ]
+  },
+  {
+   "name": "Mansi’s JS Journey page (/m)",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/js-journey/qa-out/v2-fixes/student-typical-390-dark-top.png",
+     "caption": "Rahul’s feedback first, then this week",
+     "check": "warn",
+     "note": "Test data."
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/js-journey/qa-out/v2-fixes/student-typical-1440-light-full.png",
+     "caption": "Her history and the sign-off form for study away from the app",
+     "check": "warn",
+     "note": "Test data."
+    }
+   ]
+  }
+ ]
+}

@@ -162,6 +162,13 @@ export interface JourneyStatus {
   sectionDue: Record<string, string>;
   /** sections her plan skips (React: [4], the JS review she no longer needs) */
   skippedSections: number[];
+  /** the plan's study weekdays, ISO 1 = Mon … 7 = Sun (React: [1,2,3,4,5]). With planBreaks, the calendar
+   *  the streak walks (web/src/lib/stats.ts streak = JS Journey lib/stats.ts): a missed study day ends it,
+   *  a quiet weekend / break day does not. */
+  studyWeekdays: number[];
+  /** EVERY plan break, inclusive "YYYY-MM-DD" (planBreak is only the current / next one — a streak walking
+   *  back through last month's break needs it too) */
+  planBreaks: { label: string; start: string; end: string }[];
 }
 
 /** A coach reply to one of her updates, or a standalone coach note. */
@@ -196,6 +203,12 @@ export interface JourneyFeed {
   updates: StudentUpdate[];
   /** standalone coach notes (not replies), newest first */
   notes: CoachMessage[];
+  /** FIRST page only ([] on later pages): older updates — not in `updates` — that carry a coach reply
+   *  she has not seen, newest first, replies threaded. "From Rahul" = the unread replies in `updates`
+   *  AND these: built from `updates` alone, a reply to an update outside the first page was never shown
+   *  or marked read while unreadForStudent kept counting it. Optional: a JS Journey deployed before it
+   *  (or a feed cached before it) has none. */
+  unreadReplies?: StudentUpdate[];
   /** coach replies + notes she has not seen yet */
   unreadForStudent: number;
   /** opaque cursor for the next page of updates, null at the end */

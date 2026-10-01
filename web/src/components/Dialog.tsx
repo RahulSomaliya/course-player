@@ -1,5 +1,7 @@
 // Modal dialog: scrim, centred card, Escape closes, focus moves in and is restored on close.
-// Used sparingly (wrap-up card, shortcut sheet, in-app pdf) — everything else is inline.
+// Used sparingly (sign-off card, shortcut sheet, in-app pdf) — everything else is inline.
+// Motion: `enter="rise"` lifts the card in (the sign-off card); `leaving` plays the exit (scrim fades,
+// card drops away, 180 ms) — the owner unmounts it when that is done.
 import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -12,11 +14,13 @@ interface DialogProps {
   className?: string;
   /** the player's sheet sits on the always-dark player palette */
   tone?: 'app' | 'player';
+  enter?: 'pop' | 'rise';
+  leaving?: boolean;
 }
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-export function Dialog({ open, onClose, labelledBy, children, className = 'max-w-md', tone = 'app' }: DialogProps) {
+export function Dialog({ open, onClose, labelledBy, children, className = 'max-w-md', tone = 'app', enter = 'pop', leaving = false }: DialogProps) {
   const card = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -57,14 +61,14 @@ export function Dialog({ open, onClose, labelledBy, children, className = 'max-w
   const surface = tone === 'player' ? 'bg-player-panel text-player-ink' : 'bg-raised text-ink border border-line';
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" data-dialog="open">
-      <div className="absolute inset-0 animate-fade-in bg-scrim" onClick={onClose} aria-hidden="true" />
+      <div className={`absolute inset-0 bg-scrim ${leaving ? 'animate-scrim-out' : 'animate-fade-in'}`} onClick={onClose} aria-hidden="true" />
       <div
         ref={card}
         role="dialog"
         aria-modal="true"
         aria-labelledby={labelledBy}
         tabIndex={-1}
-        className={`relative w-full animate-pop-in rounded-lg shadow-e3 outline-none ${surface} ${className}`}
+        className={`relative w-full rounded-lg shadow-e3 outline-none ${leaving ? 'animate-leave' : enter === 'rise' ? 'animate-rise' : 'animate-pop-in'} ${surface} ${className}`}
       >
         {children}
       </div>

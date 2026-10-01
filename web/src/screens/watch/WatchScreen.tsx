@@ -1,10 +1,9 @@
-// Watch `#/watch/<id>`: player (or article / pdf) + details on the left, "Course content" sidebar on the
-// right (under the details below 1024 px). `T` or the panel button = theatre (sidebar hidden).
+// Watch `#/watch/<id>`: player (or article / pdf) + details on the left, the current section on the
+// right (SectionPanel; under the details below 1024 px). `T` or the panel button = theatre (sidebar hidden).
 import { Check, ChevronLeft, ChevronRight, ExternalLink, FileText, Keyboard, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Lecture, Resource, Section } from '../../../../shared/types';
 import { useApp } from '../../app/context';
-import { CourseContent } from '../../components/CourseContent';
 import { Header } from '../../components/Header';
 import { Button, IconButton, LinkButton, Overline, buttonClass } from '../../components/ui';
 import { neighbours } from '../../lib/course';
@@ -14,9 +13,11 @@ import { withLast, withPos, withPrefs } from '../../lib/progress';
 import { hrefFor, navigate } from '../../lib/router';
 import { browserStore, readString, writeString } from '../../lib/storage';
 import { Player, type PlayerHandle } from '../../player/Player';
+import { useJourney } from '../../state/journey';
 import { useProgress, useProgressStore } from '../../state/progress';
 import { useStudy } from '../../state/study';
 import { ArticleBody, PdfFrame, PdfSheet } from './LectureViews';
+import { SectionPanel } from './SectionPanel';
 import { ShortcutSheet } from './ShortcutSheet';
 
 const THEATRE_KEY = 'cp:theatre'; // a per-browser convenience, not progress
@@ -46,6 +47,7 @@ function Watch({ lecture, section }: { lecture: Lecture; section: Section }) {
   const { index } = useApp();
   const store = useProgressStore();
   const study = useStudy();
+  const { status } = useJourney();
   const prefs = useProgress((s) => s.prefs);
   const progress = useProgress((s) => s.lectures[lecture.id]);
   const { prev, next } = neighbours(index, lecture.id);
@@ -160,7 +162,7 @@ function Watch({ lecture, section }: { lecture: Lecture; section: Section }) {
           <IconButton label="Keyboard shortcuts (?)" onClick={() => setHelp(true)} desktopOnly>
             <Keyboard className="size-4" strokeWidth={1.5} />
           </IconButton>
-          <IconButton label={theatre ? 'Show course content (T)' : 'Hide course content (T)'} onClick={toggleTheatre} aria-pressed={theatre}>
+          <IconButton label={theatre ? 'Show the section (T)' : 'Hide the section (T)'} onClick={toggleTheatre} aria-pressed={theatre}>
             {theatre ? <PanelRightOpen className="size-4" strokeWidth={1.5} /> : <PanelRightClose className="size-4" strokeWidth={1.5} />}
           </IconButton>
         </div>
@@ -245,19 +247,7 @@ function Watch({ lecture, section }: { lecture: Lecture; section: Section }) {
               </div>
             )}
           </div>
-          {!theatre && (
-            <aside
-              aria-label="Course content"
-              className="mt-12 overflow-hidden rounded-lg border border-line bg-surface lg:sticky lg:top-20 lg:mt-0 lg:flex lg:h-[calc(100vh-6.5rem)] lg:flex-col"
-            >
-              <div className="border-b border-line px-4 py-3">
-                <h2 className="text-sm font-semibold text-ink">Course content</h2>
-              </div>
-              <div data-scroller className="quiet-scroll lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
-                <CourseContent variant="sidebar" currentId={lecture.id} />
-              </div>
-            </aside>
-          )}
+          {!theatre && <SectionPanel currentId={lecture.id} plan={status} />}
         </div>
       </main>
       <ShortcutSheet open={help} onClose={() => setHelp(false)} />

@@ -276,6 +276,8 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(props, ref
       data-chrome={chromeVisible ? 'visible' : 'hidden'}
       onPointerMove={wake}
       onPointerLeave={() => playing && setAwake(false)}
+      // The morph target of Home's Continue thumbnail (ContinueHero, lib/motion.ts navigateWithMorph).
+      style={{ viewTransitionName: 'lecture-media' }}
       className={`group/player relative isolate aspect-video w-full select-none overflow-hidden bg-player text-player-ink ${
         fullscreen ? '' : 'rounded-lg'
       } ${chromeVisible ? '' : 'cursor-none'}`}

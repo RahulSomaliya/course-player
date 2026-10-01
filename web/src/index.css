@@ -10,6 +10,8 @@
   --surface: oklch(0.995 0.002 80);
   --raised: oklch(0.995 0.002 80);
   --fill: oklch(0.955 0.006 80);
+  /* a recessed panel INSIDE a raised card (the sign-off summary): darker than its card in both themes */
+  --sunken: oklch(0.955 0.006 80);
   --fill-strong: oklch(0.925 0.008 80);
   --control: oklch(0.995 0.002 80);
   --line: oklch(0.9 0.008 80);
@@ -51,6 +53,7 @@
     --surface: oklch(0.21 0.007 70);
     --raised: oklch(0.25 0.008 70);
     --fill: oklch(0.26 0.008 70);
+    --sunken: oklch(0.2 0.007 70);
     --fill-strong: oklch(0.3 0.008 70);
   --control: oklch(0.36 0.008 70);
     --line: oklch(0.3 0.008 70);
@@ -78,6 +81,7 @@
   --surface: oklch(0.21 0.007 70);
   --raised: oklch(0.25 0.008 70);
   --fill: oklch(0.26 0.008 70);
+  --sunken: oklch(0.2 0.007 70);
   --fill-strong: oklch(0.3 0.008 70);
   --control: oklch(0.36 0.008 70);
   --line: oklch(0.3 0.008 70);
@@ -103,6 +107,7 @@
   --color-surface: var(--surface);
   --color-raised: var(--raised);
   --color-fill: var(--fill);
+  --color-sunken: var(--sunken);
   --color-fill-strong: var(--fill-strong);
   --color-control: var(--control);
   --color-line: var(--line);
@@ -138,18 +143,32 @@
   --radius-md: 8px;
   --radius-lg: 12px;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --text-2xl--line-height: 1.25;
   --text-2xl--letter-spacing: -0.015em;
   --text-3xl--line-height: 1.2;
   --text-3xl--letter-spacing: -0.02em;
-  --text-4xl--line-height: 1.1;
-  --text-4xl--letter-spacing: -0.025em;
   --animate-pulse-out: pulse-out 500ms var(--ease-out) forwards;
   --animate-pop-in: pop-in 200ms var(--ease-out);
   --animate-fade-in: fade-in 250ms var(--ease-out);
   --animate-breathe: breathe 1.6s ease-in-out infinite;
   /* the Up next ring: a pathLength=100 circle emptying over the 5 s countdown (Player.tsx UP_NEXT_MS) */
   --animate-countdown: countdown 5s linear forwards;
+  /* v2 motion system (docs/design.md "Motion"). Entrances ease out; exits are faster and ease in.
+     Anything that can be on screen at first paint starts from a VISIBLE state (arrive, bar-rise): a
+     screenshot or a skipped animation must never catch it hidden. `backwards` holds the first keyframe
+     through a stagger delay, so a delayed row never flashes in its final state first. */
+  --animate-rise: rise 260ms var(--ease-out) backwards;
+  --animate-arrive: arrive 300ms var(--ease-out) backwards;
+  --animate-leave: leave 180ms var(--ease-in) forwards;
+  --animate-scrim-out: fade-out 180ms var(--ease-in) forwards;
+  --animate-row-in: row-in 220ms var(--ease-out) backwards;
+  --animate-bar-rise: bar-rise 520ms var(--ease-out) backwards;
+  --animate-draw: draw 260ms var(--ease-out) 60ms backwards;
+  --animate-disc-in: disc-in 180ms var(--ease-out) backwards;
+  --animate-step-next: step-next 220ms var(--ease-out) backwards;
+  --animate-step-prev: step-prev 220ms var(--ease-out) backwards;
+  --animate-check-in: check-in 220ms var(--ease-out) backwards;
 
   @keyframes pulse-out {
     from {
@@ -187,6 +206,72 @@
       stroke-dashoffset: 100;
     }
   }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(12px) scale(0.985);
+    }
+  }
+  @keyframes arrive {
+    from {
+      opacity: 0.4;
+      transform: translateY(6px);
+    }
+  }
+  @keyframes leave {
+    to {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+  }
+  @keyframes fade-out {
+    to {
+      opacity: 0;
+    }
+  }
+  @keyframes row-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+  }
+  @keyframes bar-rise {
+    from {
+      transform: scaleY(0.25);
+    }
+  }
+  @keyframes draw {
+    from {
+      stroke-dashoffset: 1;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+  @keyframes disc-in {
+    from {
+      opacity: 0.4;
+      transform: scale(0.6);
+    }
+  }
+  @keyframes step-next {
+    from {
+      opacity: 0.3;
+      transform: translateX(16px);
+    }
+  }
+  @keyframes step-prev {
+    from {
+      opacity: 0.3;
+      transform: translateX(-16px);
+    }
+  }
+  @keyframes check-in {
+    from {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+  }
   @keyframes breathe {
     0%,
     100% {
@@ -213,9 +298,11 @@
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
-  /* Full-width rows inside a clipping scroller (the Watch sidebar, the speed menu): a 2 px OUTSET ring
-     falls outside the row and the overflow clips its sides, leaving loose lines. Draw it inset. */
-  .quiet-scroll :focus-visible {
+  /* Full-width rows inside a clipping box (the Watch sidebar scroller, the speed menu, every Collapse
+     panel — overflow:hidden while it animates): a 2 px OUTSET ring falls outside the row and the
+     overflow clips its sides, leaving loose lines. Draw it inset. */
+  .quiet-scroll :focus-visible,
+  .inset-focus :focus-visible {
     outline-offset: -2px;
   }
   ::selection {
@@ -230,14 +317,69 @@
   }
 }
 
+/* Home → Watch: the Continue thumbnail morphs into the player (lib/motion.ts navigateWithMorph).
+   Everything else fades THROUGH, never across: old page out in 90 ms, new page in from 70 ms. A plain
+   cross-fade layered two text-heavy pages for ~150 ms (both lecture titles 12 px apart, home's stats
+   through Watch's sidebar — 2026-10-01 review); keep the overlap this small. */
+::view-transition-group(lecture-media) {
+  animation-duration: 340ms;
+  animation-timing-function: var(--ease-out);
+}
+::view-transition-old(lecture-media),
+::view-transition-new(lecture-media) {
+  animation-duration: 340ms;
+  animation-timing-function: var(--ease-out);
+  height: 100%;
+  object-fit: cover;
+}
+::view-transition-old(root) {
+  animation: 90ms var(--ease-in) both vt-out;
+}
+::view-transition-new(root) {
+  animation: 160ms var(--ease-out) 70ms both vt-in;
+}
+@keyframes vt-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes vt-in {
+  from {
+    opacity: 0;
+  }
+}
+/* Home's header is narrower than Watch's (max-w 1148 vs 1600): cross-fading the two ghosts both titles
+   side by side. It switches instantly instead — it is chrome, not the moment. */
+::view-transition-old(app-header) {
+  display: none;
+}
+::view-transition-new(app-header) {
+  animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    /* a stagger delay would otherwise hold the first keyframe (bars at 25 %, rows hidden) */
+    animation-delay: 0s !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
     scroll-behavior: auto !important;
+  }
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
+
+/* Touch screens have no hover: the section chevron (hover/focus-only on a mouse) stays visible. */
+@media (hover: none) {
+  .hover-reveal {
+    opacity: 1 !important;
   }
 }
 

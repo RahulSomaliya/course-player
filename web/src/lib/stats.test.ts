@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { completion, last30, streak, studiedOn, timeLeft } from './stats';
+import { completion, last30, streak, studiedOn, studyCalendar, type StudyCalendar } from './stats';
+import type { JourneyStatus } from '../../../shared/types';
 import { progressWith, sampleCourse } from './test-fixtures';
-
-const at = (key: string, hour = 12): number => {
-  const [y, m, d] = key.split('-').map(Number) as [number, number, number];
-  return new Date(y, m - 1, d, hour).getTime();
-};
 
 describe('studiedOn (Today)', () => {
   it('reads the day, 0 when absent', () => {
@@ -14,28 +10,67 @@ describe('studiedOn (Today)', () => {
   });
 });
 
-describe('streak', () => {
-  it('counts consecutive days of >= 5 min ending today', () => {
-    expect(streak({ '2026-09-29': 300, '2026-09-30': 900, '2026-10-01': 3600 }, '2026-10-01')).toBe(3);
+// The streak counts STUDY days (her plan: Mon–Fri, Diwali 1–15 Nov off). Walking back from today:
+// ≥ 5 min adds 1 (weekends + break days too); a plan study day under 5 min ends it — except today,
+// still in progress; a weekend / break day under 5 min is skipped. SAME TABLE as JS Journey
+// tests/stats.test.ts (its lib/stats.ts mirrors this rule) — change both together.
+const PLAN: StudyCalendar = { studyWeekdays: [1, 2, 3, 4, 5], breaks: [{ start: '2026-11-01', end: '2026-11-15' }] };
+const M = 900; // a real study day
+const STREAK_CASES: { name: string; days: Record<string, number>; today: string; want: number }[] = [
+  { name: 'weekend gap: Thu + Fri, then Monday studied', days: { '2026-10-08': M, '2026-10-09': M, '2026-10-12': M }, today: '2026-10-12', want: 3 },
+  { name: 'weekend gap: Monday not studied yet (today in progress)', days: { '2026-10-08': M, '2026-10-09': M }, today: '2026-10-12', want: 2 },
+  { name: 'a Sunday with nothing is skipped', days: { '2026-10-08': M, '2026-10-09': M }, today: '2026-10-11', want: 2 },
+  { name: 'weekend study adds', days: { '2026-10-09': M, '2026-10-10': 600, '2026-10-11': 300, '2026-10-12': M }, today: '2026-10-12', want: 4 },
+  { name: 'missed Wednesday breaks it', days: { '2026-10-12': M, '2026-10-13': M, '2026-10-15': M }, today: '2026-10-15', want: 1 },
+  { name: 'a study day under 5 min breaks it', days: { '2026-10-12': M, '2026-10-13': 299, '2026-10-14': M }, today: '2026-10-14', want: 1 },
+  { name: 'yesterday (a study day) missed → 0', days: { '2026-10-12': M }, today: '2026-10-14', want: 0 },
+  { name: 'today in progress under 5 min neither adds nor breaks', days: { '2026-10-12': M, '2026-10-13': 120 }, today: '2026-10-13', want: 1 },
+  { name: 'today at 5 min adds', days: { '2026-10-12': M, '2026-10-13': 300 }, today: '2026-10-13', want: 2 },
+  { name: 'Diwali gap: Thu 29 + Fri 30 Oct, then Mon 16 Nov', days: { '2026-10-29': M, '2026-10-30': M, '2026-11-16': M }, today: '2026-11-16', want: 3 },
+  { name: 'during Diwali the streak holds', days: { '2026-10-29': M, '2026-10-30': M }, today: '2026-11-04', want: 2 },
+  { name: 'study on a break day adds', days: { '2026-10-30': M, '2026-11-03': 1200 }, today: '2026-11-04', want: 2 },
+  { name: 'missing the last study day before the break still breaks it', days: { '2026-10-29': M }, today: '2026-11-04', want: 0 },
+  { name: 'crosses month ends', days: { '2026-09-30': M, '2026-10-01': M }, today: '2026-10-01', want: 2 },
+  { name: 'fresh profile', days: {}, today: '2026-10-01', want: 0 },
+];
+
+describe('streak (study days)', () => {
+  it.each(STREAK_CASES)('$name → $want', ({ days, today, want }) => {
+    expect(streak(days, today, PLAN)).toBe(want);
   });
-  it('still counts when the streak ends yesterday (today not studied yet)', () => {
-    expect(streak({ '2026-09-29': 300, '2026-09-30': 900 }, '2026-10-01')).toBe(2);
+  it('nothing studied at all on a plan with no study days → 0 (the walk stops at the oldest study day)', () => {
+    expect(streak({}, '2026-10-14', { studyWeekdays: [], breaks: [] })).toBe(0);
+    expect(streak({ '2026-10-05': M, '2026-10-09': M }, '2026-10-14', { studyWeekdays: [], breaks: [] })).toBe(2);
   });
-  it('a short today (< 5 min) does not break a streak that ends yesterday', () => {
-    expect(streak({ '2026-09-30': 900, '2026-10-01': 120 }, '2026-10-01')).toBe(1);
+});
+
+describe('studyCalendar (the plan the streak walks)', () => {
+  it('reads the study weekdays + every break from her JS Journey status', () => {
+    const diwali = { label: 'Diwali', start: '2026-11-01', end: '2026-11-15' };
+    const status: JourneyStatus = {
+      pace: 'on-track',
+      daysDelta: 0,
+      week: 5,
+      totalWeeks: 12,
+      targetDate: '2026-12-25',
+      deadline: '2027-01-01',
+      goal: null,
+      coachNote: null,
+      planBreak: null, // only the current / next one — the streak needs every break (planBreaks)
+      sectionDue: {},
+      skippedSections: [4],
+      studyWeekdays: [1, 2, 3, 4, 5, 6],
+      planBreaks: [diwali],
+    };
+    expect(studyCalendar(status)).toEqual({
+      studyWeekdays: [1, 2, 3, 4, 5, 6],
+      breaks: [diwali],
+    });
   });
-  it('is 0 when the last study day was before yesterday', () => {
-    expect(streak({ '2026-09-28': 3600 }, '2026-10-01')).toBe(0);
-  });
-  it('a gap day or a < 5 min day ends the run', () => {
-    expect(streak({ '2026-09-27': 900, '2026-09-29': 900, '2026-09-30': 900 }, '2026-09-30')).toBe(2);
-    expect(streak({ '2026-09-28': 900, '2026-09-29': 299, '2026-09-30': 900 }, '2026-09-30')).toBe(1);
-  });
-  it('crosses month ends', () => {
-    expect(streak({ '2026-09-30': 900, '2026-10-01': 900 }, '2026-10-01')).toBe(2);
-  });
-  it('is 0 for a fresh profile', () => {
-    expect(streak({}, '2026-10-01')).toBe(0);
+  it('no status (not connected, nothing cached): Mon–Fri, no breaks', () => {
+    expect(studyCalendar(null)).toEqual({ studyWeekdays: [1, 2, 3, 4, 5], breaks: [] });
+    // without the plan, a Diwali weekday counts as missed — the cost of never having connected
+    expect(streak({ '2026-10-30': M }, '2026-11-04', studyCalendar(null))).toBe(0);
   });
 });
 
@@ -55,39 +90,6 @@ describe('completion', () => {
     const r = completion(c, p.lectures);
     expect(r.doneLectures).toBe(3);
     expect(r.percent).toBeCloseTo((1800 / 4260) * 100, 5);
-  });
-});
-
-describe('timeLeft', () => {
-  const c = sampleCourse();
-  const ids = c.sections.flatMap((s) => s.lectures.map((l) => l.id));
-  it('remaining video time with no pace yet → eta null', () => {
-    expect(timeLeft(c, {}, {}, '2026-10-01')).toEqual({ remaining: 4260, eta: null });
-  });
-  it('projects a finish date from the content pace of the last 14 days', () => {
-    // 1800 s of content finished over a 14-day window → 1800/14 s a day; 2460 s left → ceil(19.13) = 20 days
-    const days: Record<string, number> = { '2026-09-18': 3600 }; // first study day 14 days back
-    const p = progressWith({
-      [ids[0] as string]: { done: true, doneAt: at('2026-09-20') },
-      [ids[5] as string]: { done: true, doneAt: at('2026-10-01') },
-    });
-    const r = timeLeft(c, p.lectures, days, '2026-10-01');
-    expect(r.remaining).toBe(4260 - 1800);
-    expect(r.eta).toBe('2026-10-21');
-  });
-  it('ignores content finished before the 14-day window', () => {
-    const p = progressWith({ [ids[0] as string]: { done: true, doneAt: at('2026-09-01') } });
-    expect(timeLeft(c, p.lectures, { '2026-09-01': 900 }, '2026-10-01').eta).toBeNull();
-  });
-  it('a learner who started 2 days ago is measured over 2 days, not 14', () => {
-    const p = progressWith({ [ids[5] as string]: { done: true, doneAt: at('2026-10-01') } }); // 1200 s
-    // window = 2 days (30 Sep + 1 Oct) → 600 s/day; 3060 s left → 6 days
-    const r = timeLeft(c, p.lectures, { '2026-09-30': 600, '2026-10-01': 1800 }, '2026-10-01');
-    expect(r.eta).toBe('2026-10-07');
-  });
-  it('is zero with no eta once everything is done', () => {
-    const all = Object.fromEntries(ids.map((id) => [id, { pos: 0, done: true, doneAt: at('2026-10-01') }]));
-    expect(timeLeft(c, all, { '2026-10-01': 9000 }, '2026-10-01')).toEqual({ remaining: 0, eta: null });
   });
 });
 

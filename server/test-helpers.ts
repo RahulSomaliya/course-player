@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { JourneySession, ProgressState } from '../shared/types.ts';
+import type { CoachMessage, JourneyFeed, JourneySession, ProgressSnapshot, ProgressState } from '../shared/types.ts';
 
 // ---- temp dirs ----------------------------------------------------------------
 
@@ -152,6 +152,21 @@ export function progress(updatedAt: number, extra: Partial<ProgressState> = {}):
   };
 }
 
+export function snapshot(takenAt: number, extra: Partial<ProgressSnapshot> = {}): ProgressSnapshot {
+  return {
+    course: 'react-2023',
+    takenAt,
+    lecturesDone: 12,
+    lecturesTotal: 410,
+    videoSecondsDone: 5_400,
+    videoSecondsTotal: 241_800,
+    sectionsDone: [1, 2],
+    current: { sectionNumber: 3, lectureNumber: 5, title: 'Pure React' },
+    days: { '2026-10-05': 4_320 },
+    ...extra,
+  };
+}
+
 export function session(id: string, extra: Partial<JourneySession> = {}): JourneySession {
   return {
     id,
@@ -165,6 +180,47 @@ export function session(id: string, extra: Partial<JourneySession> = {}): Journe
     finishedSections: [],
     mood: '🙂',
     note: null,
+    stuck: false,
+    autoClosed: false,
+    progress: snapshot(Date.parse('2026-10-05T10:12:00.000Z')),
+    ...extra,
+  };
+}
+
+/** A coach message id the way JS Journey makes them — a uuid (its feed/read route 400s anything else):
+ *  msgId(1) = 00000000-0000-4000-8000-000000000001. */
+export const msgId = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+/** the reply + the standalone note in feed() */
+export const M_REPLY = msgId(1);
+export const M_NOTE = msgId(2);
+
+export function coachMessage(id: string, extra: Partial<CoachMessage> = {}): CoachMessage {
+  return { id, body: 'Nice — keep the cleanup functions short.', createdAt: '2026-10-05T18:00:00.000Z', readAt: null, ...extra };
+}
+
+/** A first page with one update (one unread reply) and one unread standalone note. */
+export function feed(extra: Partial<JourneyFeed> = {}): JourneyFeed {
+  return {
+    updates: [
+      {
+        id: 's1',
+        source: 'player',
+        studyDate: '2026-10-05',
+        createdAt: '2026-10-05T10:12:30.000Z',
+        minutes: 72,
+        sectionNumber: 3,
+        sectionTitle: 'A First Look at React',
+        lectures: [{ section: 3, lecture: 4, title: 'Hello React' }],
+        mood: '🙂',
+        note: 'useEffect cleanup confused me',
+        stuck: true,
+        coachReadAt: '2026-10-05T17:59:00.000Z',
+        replies: [coachMessage(M_REPLY)],
+      },
+    ],
+    notes: [coachMessage(M_NOTE, { body: 'Proud of you this week.', createdAt: '2026-10-06T07:00:00.000Z' })],
+    unreadForStudent: 2,
+    nextCursor: null,
     ...extra,
   };
 }

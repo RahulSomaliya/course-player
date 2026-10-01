@@ -1,12 +1,12 @@
-// App-wide context for a chosen profile: the course, its index, the profile and app-level actions.
+// App-wide context for the learner: the course, its index, her profile and app-level actions.
 import { createContext, useContext } from 'react';
 import type { Course, Profile } from '../../../shared/types';
 import type { CourseIndex } from '../lib/course';
 
 export interface AppActions {
-  /** End session → wrap-up card (journey-connected, ≥ 5 min) → send; otherwise ends quietly. */
-  endSession: () => void;
-  /** Quit → wrap-up card when due → flush progress → stop the server → "Stopped" page. */
+  /** Sign off → the sign-off card (earlier sessions first; with nothing unsigned, a note-only update). */
+  openSignOff: () => void;
+  /** Quit → with something unsigned, the sign-off card first ("Sign off & quit") → flush → stop → "Stopped". */
   quit: () => void;
   /** after connecting/disconnecting JS Journey */
   updateProfile: (p: Profile) => void;

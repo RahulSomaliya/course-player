@@ -14,6 +14,7 @@ a raw colour anywhere in `web/src/**/*.tsx` is a bug (it breaks the other theme)
 | `surface` | `0.995 0.002 80` | `0.21 0.007 70` | raised card (hero, menus' base) — dark: lighter = higher |
 | `raised` | `0.995 0.002 80` | `0.25 0.008 70` | popovers, dialogs (dark: lighter still) |
 | `fill` | `0.955 0.006 80` | `0.26 0.008 70` | hover wash, tracks, skeletons |
+| `sunken` | `0.955 0.006 80` | `0.20 0.007 70` | a recessed panel inside a raised card (the sign-off summary). Dark: `fill` (0.26) on `raised` (0.25) vanished — recessed must be DARKER than its card |
 | `control` | `0.995 0.002 80` | `0.36 0.008 70` | the selected segment of a segmented control (lighter than its track in both themes) |
 | `line` | `0.90 0.008 80` | `0.30 0.008 70` | hairline dividers (low contrast on purpose) |
 | `ink` | `0.22 0.01 70` (16.6:1) | `0.93 0.008 80` (15.6:1) | primary text |
@@ -48,14 +49,16 @@ connected?"). Status never relies on colour alone (done = ✓ icon + accent; par
 | `text-xl` | 20 / 28 | section titles in dialogs |
 | `text-2xl` | 24 / 30, −0.015em | lecture title on Watch, stat numbers |
 | `text-3xl` | 30 / 36, −0.02em | hero lecture title |
-| `text-4xl` | 36 / 40, −0.025em | "Who's studying?" |
+
+Rahul's messages ("From Rahul") are `text-lg` at a 68ch measure: his words are the loudest text on home
+after the Continue title, but never a wall of 130-character lines.
 
 ## Space, size, radius
 
 Tailwind's 4 px ladder only (4 · 8 · 12 · 16 · 24 · 32 · 48 · 64 · 96). More space between groups than
 within them. Home column max 1100 px; reading column 68ch; Watch sidebar 360 px (≥1024 px only).
 Radius: `rounded-md` 8 px (buttons, inputs, chips), `rounded-lg` 12 px (cards, player), `rounded-full`
-(avatars' focus ring, pills, the session chip). Never square and rounded side by side.
+(pills, the Sign off button, dots). Never square and rounded side by side.
 
 ## Elevation (role-based; dark mode leans on lighter surfaces, shadows only add a little)
 
@@ -63,14 +66,39 @@ Radius: `rounded-md` 8 px (buttons, inputs, chips), `rounded-lg` 12 px (cards, p
 |---|---|---|
 | `shadow-e1` | `0 1px 2px ink/6%, 0 1px 3px ink/10%` | primary button, hero card |
 | `shadow-e2` | `0 4px 8px ink/8%, 0 2px 4px ink/6%` | menus, popovers |
-| `shadow-e3` | `0 16px 32px ink/14%, 0 4px 8px ink/6%` | dialogs (wrap-up, shortcuts) |
+| `shadow-e3` | `0 16px 32px ink/14%, 0 4px 8px ink/6%` | dialogs (sign-off card, shortcuts) |
 
-## Motion
+## Motion (v2 — professional, quiet, purposeful)
 
-150 ms for hover/press, 200 ms for menus and the player chrome, 250 ms for dialogs. One curve:
-`--ease-out: cubic-bezier(0.22, 1, 0.36, 1)`. Only `opacity` and `transform` animate. No bounce.
-`prefers-reduced-motion: reduce` turns every transition/animation to ~0 ms. **No colour transitions on
-state indicators** (done ticks, progress, the live dot) — screenshots catch them mid-fade.
+Motion explains a change; it never decorates. Every moment below is OFF under
+`prefers-reduced-motion: reduce` (index.css zeroes durations AND delays, and drops every
+`::view-transition-*` animation; JS-driven motion asks `lib/motion.ts prefersReducedMotion()`).
+
+Feedback holds are reading time, not motion: "Sent ✓" (650 ms) and "✓ Got it" (220 ms) stay under
+reduced motion — only the movement around them becomes instant.
+
+**Curves.** Entrances: `--ease-out: cubic-bezier(0.22, 1, 0.36, 1)`. Exits: `--ease-in: cubic-bezier(0.4, 0,
+1, 1)`, about 70 % of the entrance duration. No bounce, no spring overshoot anywhere.
+**Durations.** 150 ms hover/press · 200 ms menus, player chrome, chevrons · 220 ms accordion · 250–300 ms
+arrivals and dialogs · 340 ms the morph · ≤ 700 ms the first-paint count-up. Only `opacity`, `transform`
+(+ `grid-template-rows` for the accordion, `stroke-dashoffset` for ticks) animate.
+**Visible start rule.** Anything that can be on screen at first paint animates FROM a visible state
+(`arrive` starts at 40 % opacity, bars at 25 % height, numbers at 0): a screenshot, a slow device or a
+skipped animation never catches it hidden. Staggered keyframes use `backwards` fill so a delayed row
+never flashes in its final state first. **No colour transitions on state indicators** (done ticks, the
+waiting dot, progress) — screenshots catch them mid-fade.
+
+| Moment | What moves | Spec | Where |
+|---|---|---|---|
+| Home → Watch | the Continue thumbnail morphs into the player | View Transitions API, `view-transition-name: lecture-media` on both; group 340 ms ease-out; the page fades THROUGH, never across: old out 90 ms ease-in, new in 160 ms ease-out from 70 ms (a 180 ms cross-fade layered both pages' titles); header (`app-header`) swaps instantly | `lib/motion.ts navigateWithMorph`, `ContinueHero`, `Player`, `index.css` |
+| Section open / close | height 0fr ↔ 1fr, chevron turns 180° | `grid-template-rows` 220 ms; lecture rows `row-in` (opacity + 4 px rise, 220 ms) staggered 15 ms, capped at 12 rows; lectures mount only while open | `components/Collapse.tsx`, `LectureList` |
+| Lecture / section becomes done | the ✓ draws in (disc scales in first) | `draw` 260 ms after 60 ms (`stroke-dashoffset` 1 → 0, `pathLength=1`); `disc-in` 180 ms — **only on the change, never on first render** | `ui.tsx LectureMark`, `QuietCheck` |
+| First paint of home | Today / Streak / Complete count up; 30-day bars rise | WHEN EACH FIRST COMES INTO VIEW (≥ 40 % visible, `useSeenOnce`) — usually below the fold, so at mount they finished unseen; until then numbers show 0 and bars hold at 25 %. Count-up ≤ 700 ms ease-out-cubic from 0 (rAF; final value for screen readers); `bar-rise` 520 ms from 25 % height, 12 ms stagger. Once per page load, not on every return from Watch | `CountUp.tsx`, `Stats`, `ThirtyDays`, `HomeScreen`, `lib/motion.ts` |
+| Continue thumbnail | the still frame settles in | transparent over the `player` box until decoded (`loadeddata`), then opacity 200 ms ease-out — no black box, then a pop | `ContinueHero` (`HeroFrame`) |
+| "From Rahul" arrives / Got it | soft rise; ✓ morph, then the block fades while it folds | `arrive` 300 ms; Got it → check 220 ms → fade 150 ms ease-OUT + fold 220 ms ease-IN (it starts 25–40 ms after the hold), done ≈ 470 ms after the click (inside the 500 ms input window, so it adds no CLS — a longer fold for tall cards measured 490–498 ms: too close). Fast fade over a slow-starting fold is why no half-clipped text is ever seen (the reverse pairing showed it at 70 % opacity) | `FromRahul.tsx`, `Collapse` |
+| Sign-off card | rises in; Send → "Sent ✓" → next step or closes | `rise` 260 ms (opacity + 12 px + 0.985 scale); `check-in` 220 ms; hold 650 ms; next step `step-next` 220 ms; close = scrim `fade-out` + card `leave` 180 ms. "Sent ✓" stays on the button through the exit, at full colour: busy = `aria-disabled` + no pointer events, never `disabled` (its 50 % look read as "undone") | `SignOffCard.tsx`, `Dialog.tsx` |
+| Watch sidebar ‹ › | the section's lecture list slides in from the side it came from | `step-next` / `step-prev` 220 ms (16 px + opacity from 30 %) | `SectionPanel.tsx` |
+| Hover meta | a closed section's length / due date | opacity 150 ms; touch screens (`hover: none`) keep the chevron visible | `CourseContent.tsx` |
 
 ## Components (one primary action per view)
 
@@ -79,23 +107,43 @@ state indicators** (done ticks, progress, the live dot) — screenshots catch th
 - **Focus** — `outline: 2px solid ring; outline-offset: 2px` on `:focus-visible` everywhere; inset
   (`-2px`) inside `.quiet-scroll` scrollers (see Traps).
 - **Progress line** — 3 px track (`fill`), accent value, rounded ends; never animated.
-- **Lecture status** — done: accent disc + ✓ (`on-accent`); partly watched: accent arc ring on a
-  `line` circle; not started: `line` circle.
-- **Avatars** — neutral `fill` tiles with the initial in `ink`; selection = accent ring. Nothing else
-  is colourful.
+- **Lecture status** — done: accent disc + ✓ (`on-accent`); current: accent dot; plain: `line` circle.
+  Three states only (v2 dropped the partly-watched arc).
+- **Section row (closed)** — number (`ink-subtle`, tabular) · title · a quiet accent ✓ (no disc) when
+  100 % done. Length and due date appear on hover/focus in one right-aligned column; the current section
+  shows its due date always and a dot on its part's hairline; a skipped section (her plan, §04) is
+  `ink-subtle` with "Skipped" — unless she finished it: finished wins (a ✓, never both). No progress
+  bars, counts or "Optional" badges.
+- **Part header** — overline "PART 1" (`text-xs` caps, `ink-muted`) · title (`text-lg` 600) · quiet
+  "4 projects"; its sections nest under a 1 px `line` hairline, the part's intro lectures as a
+  "Part introduction" row.
+- **Sign off** — a `rounded-full` secondary pill, always in the header: "Sign off · 42m" while studying;
+  a static 10 px accent dot (ring = canvas) when a session waits for her note.
+- **Pills** — pace (`accent-soft` / `accent-ink`; behind = `fill` / `ink`), "Stuck" (same accent pill).
 
 ## Screens
 
-- **Who's studying?** — centred, 36 px question, 128 px tiles, names under.
-- **Home** — header · Continue hero (the one primary action) · plan strip (Mansi) · 4 stats in a quiet
-  row (no cards, hairline dividers) · 30-day bars · course content.
-- **Watch** — player + details left, 360 px course-content sidebar right; `T` = theatre.
+- **Home** — header · **From Rahul** (only when something is unread: a raised `surface` card, overline in
+  `accent-ink`, his words big, each reply led by her quoted note, one secondary "Got it") · Continue hero
+  (THE primary action) · **This week** (week, goal + due, pace pill — the course due date is the Due stat's
+  alone; on a break the break replaces the pace) · 4 stats in a quiet row (Today · Streak · Complete · **Due**, no cards,
+  hairline dividers) · 30-day bars · **Your updates** (latest 3, replies threaded under a hairline, "See
+  all"; a reply still unread is one quiet line "Rahul replied · above" — From Rahul shows it in full)
+  · course content.
+- **#/updates** — every update + replies in the same layout, "Show more" pages with the feed cursor.
+- **Watch** — player + details left; the right sidebar (360 px) shows ONLY the current section: overline
+  "SECTION 07", title, due date, ‹ › to step sections, lectures, and "Next: §08 …" at the bottom.
+  `T` = theatre.
+- **Sign-off card** — a dialog (max 512 px): heading ("Nice work, Mansi" / "You studied 1h 12m on Tue"),
+  the auto summary on a `fill` panel (time · lectures · section, up to 5 ✓ titles, "+N more"), the note
+  (main field), 4 moods, "I'm stuck" pill, quiet "Send without a note", primary "Send to Rahul" /
+  "Sign off & quit".
 - **Player** — Netflix feel: dark, immersive, bottom gradient chrome that fades 2.5 s after the last
   move while playing, accent played-range, centre pulse on click.
 - **30-day chart** — single series ⇒ no legend; bars ≤ 20 px wide with a 4 px rounded top, square at the
   baseline; today in `accent`, other days `chart-bar`; one 1 px `ink-subtle` average line labelled at
-  its right end; per-bar hover/focus tooltip "Tue 29 Sep · 1h 12m"; a visually-hidden table carries
-  every value.
+  its right end, in an 80 px gutter outside the plot (never over the bars); per-bar hover/focus tooltip
+  "Tue 29 Sep · 1h 12m"; a visually-hidden table carries every value.
 
 ## Traps (found in QA)
 
@@ -106,6 +154,14 @@ state indicators** (done ticks, progress, the live dot) — screenshots catch th
   not visible while the player is fullscreen.
 - Focusable rows inside a scroller need an inset outline: an outset ring on a full-width row falls outside
   it and `overflow` clips its sides (the Watch sidebar showed loose orange lines). `.quiet-scroll
-  :focus-visible` insets it — give any new clipping scroller that class.
+  :focus-visible` / `.inset-focus :focus-visible` inset it — give any new clipping box one of them
+  (`Collapse` panels clip while they animate and carry `.inset-focus`).
+- Only ONE element may carry `view-transition-name: lecture-media` at a time (the Continue thumbnail OR
+  the player); two on one page and the browser skips the transition. Only the Continue links morph —
+  any other route into Watch is a different lecture.
+- A hover-revealed label must not change the position of always-visible text next to it: keep both in
+  one right-aligned column (the section rows' "due …" / "Skipped" floated row to row before).
+- `scrollIntoView({block:'start'})` puts the target UNDER the 56 px sticky header; QA scripts clicked the
+  header instead of the section row. Scroll to `top − 72` or `block:'center'`.
 - "Subtle" text is still text: `ink-subtle` failed AA (3.2:1 on `fill`) when it was measured on canvas
   only. Check every text token on canvas, surface AND fill after any colour change.

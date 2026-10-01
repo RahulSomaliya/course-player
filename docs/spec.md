@@ -70,7 +70,7 @@ Routes:
 | `PUT /api/profiles/:profile/journey` | body `{link}` = Mansi's student link `https://<host>/m/<token>`; validate by calling JS Journey status; save to config; reply `Profile` (400 on a bad link, 502 if JS Journey rejects it) |
 | `DELETE /api/profiles/:profile/journey` | forget the link |
 | `GET /api/journey/:profile/status` | proxy `GET <journeyUrl>/api/player/status?course=<course.id>` with `Authorization: Bearer <token>`, 5 s timeout → `JourneyStatus`; 204 if not connected / unreachable / non-2xx |
-| `POST /api/journey/:profile/sessions` | validate a `JourneySession`; append to the outbox file; try to flush; reply 202 `OutboxState` |
+| `POST /api/journey/:profile/sessions` | validate a `JourneySession` (at least as strict as JS Journey: a 4xx there drops it); append to the outbox file; reply 202 `OutboxState` as soon as it is saved, then flush in the background (never await JS Journey before replying) |
 | `GET /api/journey/:profile/outbox` | `OutboxState` |
 | `POST /api/quit` | reply 202, flush outboxes (max 3 s), close, exit 0 |
 | `GET /media/<path>` | stream a course file (below) |
@@ -80,8 +80,9 @@ The token never reaches the browser (`Profile.journeyConnected` is all the web a
 
 **Outbox → JS Journey.** `POST <journeyUrl>/api/player/sessions`, `Authorization: Bearer <token>`,
 body `JourneySession`. 2xx → remove. 4xx → remove too and keep the message in `lastError` (a permanent
-rejection must not retry forever). Network error / 5xx → keep, retry on start-up, every 5 min, on each
-new session, and on quit. Dedup is JS Journey's job (by `session.id`), so retries are safe.
+rejection must not retry forever). Network error → keep and stop the flush; 5xx → keep that item and the
+rest of its kind, still deliver the other kinds (read receipts, snapshot). Retried on start-up, every
+5 min, on each new item, and on quit. Dedup is JS Journey's job (by `session.id`), so retries are safe.
 
 **Scanning** (`--root`): section folders match `^(\d{2}) (.+)$`. Suffix ` (Optional)` → `optional:true`
 and is stripped from the title. `^Part (\d+) - (.+?)(?: \((\d+) Projects?\))?$` → `part`. Files match

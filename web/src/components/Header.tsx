@@ -1,5 +1,7 @@
-// Header: course title (left) · session chip, avatar menu, Quit (right).
-import { Check, ChevronLeft, Link2, Monitor, Moon, Power, Sun } from 'lucide-react';
+// Header: course title (left; on Watch the back link) · Sign off · menu · Quit (right).
+// Sign off is always there: the live session time inside it while she studies ("Sign off · 42m"), a
+// small dot when a session waits for her note (idle 20 min, or an earlier sitting she closed the app on).
+import { Check, ChevronLeft, Link2, Monitor, Moon, Power, Settings2, Sun } from 'lucide-react';
 import { useId, useRef, useState, type FormEvent } from 'react';
 import type { Prefs } from '../../../shared/types';
 import { useApp } from '../app/context';
@@ -8,13 +10,14 @@ import { formatDuration } from '../lib/format';
 import { withPrefs } from '../lib/progress';
 import { hrefFor } from '../lib/router';
 import { useProgress, useProgressStore } from '../state/progress';
-import { useLiveSession } from '../state/study';
-import { Avatar, Button, useDismiss } from './ui';
+import { useStudy, useStudyState } from '../state/study';
+import { Button, IconButton, useDismiss } from './ui';
 
 export function Header({ back = false }: { back?: boolean }) {
-  const { course, quit } = useApp();
+  const { course } = useApp();
   return (
-    <header className="sticky top-0 z-30 border-b border-line bg-canvas">
+    // view-transition-name: the header switches instantly while Home morphs into Watch (index.css).
+    <header className="sticky top-0 z-30 border-b border-line bg-canvas [view-transition-name:app-header]">
       <div className={`mx-auto flex h-14 items-center gap-3 px-4 md:px-6 ${back ? 'max-w-[1600px]' : 'max-w-[1148px]'}`}>
         <a href={hrefFor({ name: 'home' })} className="group -ml-1 flex min-w-0 items-center gap-1 rounded-md px-1 py-1">
           {back && <ChevronLeft className="size-5 shrink-0 text-ink-muted group-hover:text-ink" strokeWidth={1.5} aria-hidden="true" />}
@@ -22,71 +25,66 @@ export function Header({ back = false }: { back?: boolean }) {
           {back && <span className="sr-only">— back to course home</span>}
         </a>
         <div className="ml-auto flex items-center gap-1 sm:gap-2">
-          <SessionChip />
-          <AvatarMenu />
-          <QuitButton onQuit={quit} />
+          <SignOffButton />
+          <Menu />
+          <QuitButton />
         </div>
       </div>
     </header>
   );
 }
 
-function SessionChip() {
-  const session = useLiveSession();
-  const { endSession } = useApp();
-  const [open, setOpen] = useState(false);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const panel = useRef<HTMLDivElement>(null);
-  useDismiss(open, () => setOpen(false), [trigger, panel], trigger);
-  if (session === null) return null;
-  const minutes = session.seconds < 60 ? '<1m' : formatDuration(session.seconds);
-  const started = new Date(session.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+function SignOffButton() {
+  const { live, pending, waiting } = useStudyState();
+  const { openSignOff } = useApp();
+  const minutes = live !== null && live.seconds >= 60 ? formatDuration(live.seconds) : null;
+  const dot = pending.length > 0 || waiting;
+  const label = [
+    'Sign off',
+    minutes ? `${minutes} studied since your last sign-off` : null,
+    dot ? 'a session is waiting for your note' : null,
+  ]
+    .filter(Boolean)
+    .join(' — ');
   return (
-    <div className="relative">
-      <button
-        ref={trigger}
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        aria-label={`Study session, ${minutes}. Open to end it.`}
-        className="inline-flex h-8 items-center gap-2 rounded-full border border-line bg-surface px-3 text-sm font-medium tabular-nums text-ink hover:bg-fill"
-      >
-        <span className="size-2 animate-breathe rounded-full bg-accent" aria-hidden="true" />
-        {minutes}
-      </button>
-      {open && (
-        <div ref={panel} className="absolute right-0 top-10 z-40 w-60 animate-pop-in rounded-lg border border-line bg-raised p-4 shadow-e2">
-          <p className="text-sm font-semibold text-ink">Study session</p>
-          <p className="mt-1 text-sm text-ink-muted">
-            {minutes} since {started}
-          </p>
-          <Button
-            variant="secondary"
-            size="sm"
-            className="mt-4 w-full"
-            onClick={() => {
-              setOpen(false);
-              endSession();
-            }}
-          >
-            End session
-          </Button>
-        </div>
-      )}
-    </div>
+    <button
+      type="button"
+      onClick={openSignOff}
+      aria-label={label}
+      data-control="sign-off"
+      className="relative inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-line bg-surface px-3 text-sm font-medium text-ink transition-[background-color] duration-150 ease-out hover:bg-fill"
+    >
+      Sign off
+      {minutes && <span className="tabular-nums text-ink-muted">· {minutes}</span>}
+      {/* static (no pulse, no colour transition): a state indicator screenshots must catch as it is */}
+      {dot && <span data-waiting aria-hidden="true" className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full bg-accent ring-2 ring-canvas" />}
+    </button>
   );
 }
 
-/** Quit stops the server, and the Stopped page cannot start it again — so it asks first (it sits right
- *  next to the avatar menu, and a misclick mid-lecture meant a trip to Finder). Same pattern as SessionChip. */
-function QuitButton({ onQuit }: { onQuit: () => void }) {
+/** Quit stops the server, and the Stopped page cannot start it again. With something unsigned, Quit
+ *  opens the sign-off card ("Sign off & quit") — that card is the confirmation. Otherwise it asks once
+ *  (it sits next to the menu, and a misclick mid-lecture meant a trip to Finder). */
+function QuitButton() {
+  const { quit } = useApp();
+  const study = useStudy();
+  useStudyState(); // re-render when hasUnsigned() changes
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   useDismiss(open, () => setOpen(false), [trigger, panel], trigger);
+  const unsigned = study.hasUnsigned();
   return (
     <div className="relative">
-      <Button ref={trigger} variant="ghost" size="sm" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label="Quit the course player">
+      <Button
+        ref={trigger}
+        variant="ghost"
+        size="sm"
+        onClick={() => (unsigned ? quit() : setOpen((o) => !o))}
+        aria-expanded={unsigned ? undefined : open}
+        aria-label="Quit the course player"
+        className="px-2 sm:px-3"
+      >
         <Power className="size-4" strokeWidth={1.5} aria-hidden="true" />
         <span className="hidden sm:inline">Quit</span>
       </Button>
@@ -100,7 +98,7 @@ function QuitButton({ onQuit }: { onQuit: () => void }) {
             className="mt-4 w-full"
             onClick={() => {
               setOpen(false);
-              onQuit();
+              quit();
             }}
           >
             Quit
@@ -117,8 +115,7 @@ const THEMES: { value: Prefs['theme']; label: string; Icon: typeof Sun }[] = [
   { value: 'dark', label: 'Dark', Icon: Moon },
 ];
 
-function AvatarMenu() {
-  const { profile } = useApp();
+function Menu() {
   const store = useProgressStore();
   const theme = useProgress((s) => s.prefs.theme);
   const [open, setOpen] = useState(false);
@@ -129,29 +126,12 @@ function AvatarMenu() {
 
   return (
     <div className="relative">
-      <button
-        ref={trigger}
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        aria-haspopup="true"
-        aria-label={`${profile.name} — profile, theme and JS Journey`}
-        className="rounded-full p-1 hover:bg-fill"
-      >
-        <Avatar name={profile.name} />
-      </button>
+      <IconButton ref={trigger} label="Settings — theme and JS Journey" size="sm" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-haspopup="true">
+        <Settings2 className="size-4" strokeWidth={1.5} />
+      </IconButton>
       {open && (
-        <div ref={panel} className="absolute right-0 top-11 z-40 w-[min(20rem,calc(100vw-2rem))] animate-pop-in rounded-lg border border-line bg-raised shadow-e2">
-          <div className="flex items-center gap-3 p-4">
-            <Avatar name={profile.name} />
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-ink">{profile.name}</p>
-              <a href={hrefFor({ name: 'who' })} className="text-sm text-ink-muted underline-offset-2 hover:text-ink hover:underline" onClick={() => setOpen(false)}>
-                Switch profile
-              </a>
-            </div>
-          </div>
-          <div className="border-t border-line p-4">
+        <div ref={panel} className="absolute right-0 top-10 z-40 w-[min(20rem,calc(100vw-2rem))] animate-pop-in rounded-lg border border-line bg-raised shadow-e2">
+          <div className="p-4">
             <p id={themeLabel} className="mb-2 text-xs font-medium text-ink-muted">
               Theme
             </p>

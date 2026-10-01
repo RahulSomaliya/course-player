@@ -1,26 +1,57 @@
-// Home stats: Today, Streak, Complete, Left (+ finish estimate) and the 30-day series.
-import type { Course, LectureProgress } from '../../../shared/types';
-import { addDays, daysBetween, localDateKey } from './dates';
+// Home stats: Today, Streak, Complete and the 30-day series. (The 4th stat, Due, comes from her plan:
+// lib/week.ts dueStat — v2 removed the finish-date projection.)
+// MIRRORED in ~/Developer/js-journey lib/stats.ts (the coach view renders her numbers from the progress
+// snapshot): change the streak rule or the "<1%"/floor label in BOTH apps, or Rahul reads a different
+// number than she does. Both walk the plan calendar JourneyStatus carries (studyWeekdays + planBreaks).
+import type { Course, JourneyStatus, LectureProgress } from '../../../shared/types';
+import { addDays, isoWeekday } from './dates';
 
 type Days = Record<string, number>;
 type Lectures = Record<string, LectureProgress>;
 
 /** A day counts towards the streak at 5 min of study. */
 export const STREAK_MIN_SECONDS = 300;
-/** The finish estimate uses the content pace of at most the last 14 days. */
-export const PACE_WINDOW_DAYS = 14;
 
 export function studiedOn(days: Days, key: string): number {
   return days[key] ?? 0;
 }
 
-/** Consecutive days with ≥ 5 min, ending today — or yesterday, so the streak survives until today's study. */
-export function streak(days: Days, today: string): number {
-  let day = studiedOn(days, today) >= STREAK_MIN_SECONDS ? today : addDays(today, -1);
+/** The plan calendar the streak walks: which weekdays are study days, and the breaks that are not. */
+export interface StudyCalendar {
+  /** ISO 1 = Mon … 7 = Sun */
+  studyWeekdays: readonly number[];
+  /** inclusive "YYYY-MM-DD" ranges */
+  breaks: readonly { start: string; end: string }[];
+}
+
+/** Mon–Fri, no breaks: the calendar without a status (not connected, nothing cached), and what a status
+ *  cached before these fields existed is filled with (state/journey.ts) — the same default the server
+ *  fills for a JS Journey that predates them (server/journey.ts DEFAULT_STUDY_WEEKDAYS). */
+export const DEFAULT_CALENDAR: StudyCalendar = { studyWeekdays: [1, 2, 3, 4, 5], breaks: [] };
+
+/** Her plan's calendar from JourneyStatus. */
+export function studyCalendar(status: JourneyStatus | null): StudyCalendar {
+  return status ? { studyWeekdays: status.studyWeekdays, breaks: status.planBreaks } : DEFAULT_CALENDAR;
+}
+
+function isStudyDay(key: string, cal: StudyCalendar): boolean {
+  return cal.studyWeekdays.includes(isoWeekday(key)) && !cal.breaks.some((b) => b.start <= key && key <= b.end);
+}
+
+/** Study days in a row, walking back from today: a day with ≥ 5 min adds 1 (a weekend or break day too);
+ *  a plan study day under 5 min ends it — except today, still in progress; a weekend / break day under
+ *  5 min is skipped. A calendar-day streak reset every Monday and all of Diwali (2026-10-01).
+ *  `cal` is required on purpose: a call without it would read a quiet weekend as a missed day. */
+export function streak(days: Days, today: string, cal: StudyCalendar): number {
+  // nothing before the oldest real study day can add, so the walk ends there (and always ends —
+  // a plan with no study days never breaks it)
+  const oldest = Object.keys(days)
+    .filter((k) => studiedOn(days, k) >= STREAK_MIN_SECONDS)
+    .reduce<string | null>((a, k) => (a === null || k < a ? k : a), null);
   let count = 0;
-  while (studiedOn(days, day) >= STREAK_MIN_SECONDS) {
-    count++;
-    day = addDays(day, -1);
+  for (let day = today; oldest !== null && day >= oldest; day = addDays(day, -1)) {
+    if (studiedOn(days, day) >= STREAK_MIN_SECONDS) count++;
+    else if (day !== today && isStudyDay(day, cal)) break;
   }
   return count;
 }
@@ -45,40 +76,6 @@ export function completion(course: Course, lectures: Lectures): Completion {
   }
   const total = course.totals.duration;
   return { percent: total > 0 ? (doneSeconds / total) * 100 : 0, doneLectures, totalLectures: course.totals.lectures };
-}
-
-/**
- * Remaining video time and a finish estimate at the recent content pace: video seconds marked done in
- * the window ÷ the window's days. The window is the last 14 days, shortened to the days since the
- * learner's first study day — otherwise someone who started 2 days ago would be measured over 14 days
- * and get an estimate months too late.
- */
-export function timeLeft(course: Course, lectures: Lectures, days: Days, today: string): { remaining: number; eta: string | null } {
-  let remaining = 0;
-  let recent = 0;
-  const firstStudied = Object.keys(days)
-    .filter((k) => (days[k] ?? 0) > 0)
-    .sort()[0];
-  const span = firstStudied === undefined ? PACE_WINDOW_DAYS : daysBetween(firstStudied, today) + 1;
-  const windowDays = Math.min(PACE_WINDOW_DAYS, Math.max(1, span));
-  const windowStart = addDays(today, -(windowDays - 1));
-  for (const s of course.sections) {
-    for (const l of s.lectures) {
-      const p = lectures[l.id];
-      if (!p?.done) {
-        remaining += l.duration;
-        continue;
-      }
-      if (p.doneAt !== null) {
-        const key = localDateKey(new Date(p.doneAt));
-        if (key >= windowStart && key <= today) recent += l.duration;
-      }
-    }
-  }
-  remaining = Math.round(remaining);
-  if (remaining === 0 || recent === 0) return { remaining, eta: null };
-  const perDay = recent / windowDays;
-  return { remaining, eta: addDays(today, Math.ceil(remaining / perDay)) };
 }
 
 export function last30(days: Days, today: string): { days: { key: string; seconds: number }[]; average: number } {

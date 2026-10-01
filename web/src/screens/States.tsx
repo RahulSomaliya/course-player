@@ -23,7 +23,7 @@ export function LoadingScreen() {
       <div className="border-b border-line">
         <div className="mx-auto flex h-14 max-w-[1148px] items-center px-4 md:px-6">
           <Skeleton className="h-4 w-48" />
-          <Skeleton className="ml-auto size-8 rounded-full" />
+          <Skeleton className="ml-auto h-8 w-24 rounded-full" />
         </div>
       </div>
       <div className="mx-auto max-w-[1148px] px-4 pt-8 md:px-6 md:pt-12">

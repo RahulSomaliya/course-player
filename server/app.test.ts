@@ -1,16 +1,21 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { BootPayload, OutboxState, Profile, ProgressState } from '../shared/types.ts';
+import type { BootPayload, JourneyFeed, OutboxState, Profile, ProgressSnapshot, ProgressState } from '../shared/types.ts';
 import { createCourseServer, type CourseServer } from './app.ts';
 import {
+  feed,
   jsonBody,
+  M_NOTE,
+  M_REPLY,
   makeTempDir,
   memoryLog,
   mp4,
+  msgId,
   progress,
   request,
   session,
+  snapshot,
   startStubJourney,
   writeTree,
   type StubJourney,
@@ -223,18 +228,155 @@ describe('JS Journey routes', () => {
     stub.setReply((req) => (req.method === 'GET' ? { status: 200, body: status } : { status: 201, body: { ok: true } }));
     const st = await request(port, 'GET', '/api/journey/mansi/status');
     expect(st.status).toBe(200);
-    expect(st.json()).toEqual(status);
+    // this stub is a v1 JS Journey: the fields added since are filled, so the browser gets the full contract
+    expect(st.json()).toEqual({ ...status, planBreak: null, sectionDue: {}, skippedSections: [], studyWeekdays: [1, 2, 3, 4, 5], planBreaks: [] });
 
     const posted = await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody(session('s1')));
     expect(posted.status).toBe(202);
-    expect(posted.json()).toEqual({ pending: 0, lastError: null } satisfies OutboxState);
+    // answered once it is saved: delivery runs after the reply (server/journey.ts queue())
+    expect(posted.json()).toEqual({ pending: 1, lastError: null } satisfies OutboxState);
+    expect(await app.journey.settled('mansi')).toEqual({ pending: 0, lastError: null });
     expect(stub.seen.at(-1)).toMatchObject({ method: 'POST', url: '/api/player/sessions', auth: `Bearer ${TOKEN}` });
 
     const invalid = await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody({ ...session('s2'), minutes: 0 }));
     expect(invalid.status).toBe(400);
+    expect((invalid.json() as { error: string }).error).toMatch(/minutes/);
+    // JS Journey would 400 these, and the outbox drops a 4xx'd update for good: refused here, up front
+    const section0 = await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody(session('s5', { sectionNumber: 0 })));
+    expect((section0.json() as { error: string }).error).toMatch(/sectionNumber/);
+    const dayAndMore = await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody(session('s6', { minutes: 1441 })));
+    expect((dayAndMore.json() as { error: string }).error).toMatch(/minutes/);
+    const noteOnly = await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody(session('s3', { minutes: 0, note: 'Read the docs on the train' })));
+    expect(noteOnly.status).toBe(202);
+    const noStuck = await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody({ ...session('s4'), stuck: undefined }));
+    expect((noStuck.json() as { error: string }).error).toMatch(/stuck/);
 
+    // the note-only 202 does not wait for its delivery: read the outbox once it ran (it raced → pending 1)
+    await app.journey.settled('mansi');
     const outbox = await request(port, 'GET', '/api/journey/mansi/outbox');
     expect(outbox.json()).toEqual({ pending: 0, lastError: null });
+  });
+});
+
+describe('JS Journey v2 routes: feed, read receipts, progress', () => {
+  const link = (): string => `${stub.origin}/m/${TOKEN}`;
+  const connect = async (): Promise<void> => {
+    expect((await request(port, 'PUT', '/api/profiles/mansi/journey', jsonBody({ link: link() }))).status).toBe(200);
+    stub.seen.length = 0;
+  };
+  /** A working JS Journey: the feed answers `page`, every write 200. */
+  const up = (page: JourneyFeed = feed()): void =>
+    stub.setReply((req) => (req.url.startsWith('/api/player/feed?') ? { status: 200, body: page } : { status: 200, body: { ok: true } }));
+  const down = (): void => stub.setReply(() => ({ status: 503, body: { error: 'maintenance' } }));
+  const outboxFile = async (): Promise<{ reads: { id: string }[]; progress: ProgressSnapshot | null }> =>
+    JSON.parse(await readFile(path.join(dataDir, 'outbox-mansi.json'), 'utf8')) as { reads: { id: string }[]; progress: ProgressSnapshot | null };
+  /** the outbox once the background delivery a write started has run (the 202 does not wait for it) */
+  const settled = (): Promise<OutboxState> => app.journey.settled('mansi');
+
+  it('feed: 204 when not connected and nothing is cached', async () => {
+    const res = await request(port, 'GET', '/api/journey/mansi/feed');
+    expect(res.status).toBe(204);
+    expect(stub.seen).toEqual([]);
+  });
+
+  it('feed: forwards the cursor, caches the first page, and serves it with x-course-player-stale: 1 when JS Journey is down', async () => {
+    await connect();
+    up();
+    const fresh = await request(port, 'GET', '/api/journey/mansi/feed');
+    expect(fresh.status).toBe(200);
+    expect(fresh.headers['x-course-player-stale']).toBeUndefined();
+    expect(fresh.headers['cache-control']).toBe('no-store');
+    expect(fresh.json()).toEqual(feed());
+    expect(stub.seen[0]).toMatchObject({ method: 'GET', url: '/api/player/feed?course=react-2023', auth: `Bearer ${TOKEN}` });
+
+    const page2 = await request(port, 'GET', '/api/journey/mansi/feed?cursor=abc%3D%3D');
+    expect(page2.status).toBe(200);
+    expect(stub.seen[1]?.url).toBe('/api/player/feed?course=react-2023&cursor=abc%3D%3D');
+
+    down();
+    const stale = await request(port, 'GET', '/api/journey/mansi/feed?cursor=');
+    expect(stale.status).toBe(200);
+    expect(stale.headers['x-course-player-stale']).toBe('1');
+    expect(stale.json()).toEqual(feed());
+    expect((await request(port, 'GET', '/api/journey/mansi/feed?cursor=abc')).status).toBe(204); // later pages are not cached
+
+    expect((await request(port, 'GET', `/api/journey/mansi/feed?cursor=${'x'.repeat(1001)}`)).status).toBe(400);
+    expect((await request(port, 'GET', '/api/journey/nobody/feed')).status).toBe(404);
+  });
+
+  it('feed/read: CSRF header, 400 for a bad body, 409 when not connected, 202 forwarded', async () => {
+    const ids = { ids: [M_REPLY] };
+    expect((await request(port, 'POST', '/api/journey/mansi/feed/read', { body: JSON.stringify(ids) })).status).toBe(403);
+    expect((await request(port, 'POST', '/api/journey/mansi/feed/read', jsonBody(ids))).status).toBe(409);
+    await connect();
+    up();
+    const bad = await request(port, 'POST', '/api/journey/mansi/feed/read', jsonBody({ ids: [] }));
+    expect(bad.status).toBe(400);
+    expect((bad.json() as { error: string }).error).toMatch(/ids/);
+    // JS Journey wants uuids: anything else is refused here, not queued to be 4xx'd (and dropped) later
+    const notUuid = await request(port, 'POST', '/api/journey/mansi/feed/read', jsonBody({ ids: [M_REPLY, 'm-reply'] }));
+    expect(notUuid.status).toBe(400);
+    const res = await request(port, 'POST', '/api/journey/mansi/feed/read', jsonBody({ ids: [M_REPLY, M_REPLY] }));
+    expect(res.status).toBe(202);
+    expect(res.json()).toEqual({ pending: 0, lastError: null } satisfies OutboxState);
+    await settled();
+    expect(stub.seen.map((s) => [s.method, s.url, s.body])).toEqual([['POST', '/api/player/feed/read', JSON.stringify({ ids: [M_REPLY] })]]);
+  });
+
+  it('feed/read while JS Journey is down: queued, the cached feed shows them read, delivered on the next flush', async () => {
+    await connect();
+    up();
+    await request(port, 'GET', '/api/journey/mansi/feed');
+    down();
+    const res = await request(port, 'POST', '/api/journey/mansi/feed/read', jsonBody({ ids: [M_REPLY, M_NOTE] }));
+    expect(res.status).toBe(202);
+    expect((await settled()).lastError).toBe('HTTP 503 — maintenance');
+    const stale = await request(port, 'GET', '/api/journey/mansi/feed');
+    expect(stale.headers['x-course-player-stale']).toBe('1');
+    const shown = stale.json() as JourneyFeed;
+    expect(shown.unreadForStudent).toBe(0);
+    expect(shown.notes[0]?.readAt).toEqual(expect.any(String));
+    // the same "Got it" again (a retried click) changes nothing
+    await request(port, 'POST', '/api/journey/mansi/feed/read', jsonBody({ ids: [M_NOTE] }));
+    await settled();
+    expect((await outboxFile()).reads.map((r) => r.id)).toEqual([M_REPLY, M_NOTE]);
+    up();
+    stub.seen.length = 0;
+    await app.journey.flush('mansi');
+    expect(stub.seen.map((s) => [s.url, s.body])).toEqual([['/api/player/feed/read', JSON.stringify({ ids: [M_REPLY, M_NOTE] })]]);
+  });
+
+  it('progress: CSRF header, 400 for an invalid snapshot, 409 when not connected, 202 forwarded; newest wins while offline', async () => {
+    expect((await request(port, 'PUT', '/api/journey/mansi/progress', { body: JSON.stringify(snapshot(1)) })).status).toBe(403);
+    expect((await request(port, 'PUT', '/api/journey/mansi/progress', jsonBody(snapshot(1)))).status).toBe(409);
+    await connect();
+    up();
+    const bad = await request(port, 'PUT', '/api/journey/mansi/progress', jsonBody(snapshot(1, { course: 'vue' })));
+    expect(bad.status).toBe(400);
+    expect((bad.json() as { error: string }).error).toMatch(/course/);
+    const ok = await request(port, 'PUT', '/api/journey/mansi/progress', jsonBody(snapshot(100)));
+    expect(ok.status).toBe(202);
+    await settled();
+    expect(stub.seen.map((s) => [s.method, s.url])).toEqual([['PUT', '/api/player/progress']]);
+
+    down();
+    await request(port, 'PUT', '/api/journey/mansi/progress', jsonBody(snapshot(300)));
+    await request(port, 'PUT', '/api/journey/mansi/progress', jsonBody(snapshot(200)));
+    await settled();
+    expect((await outboxFile()).progress?.takenAt).toBe(300);
+  });
+
+  it('quit delivers queued read receipts and the snapshot too', async () => {
+    await connect();
+    down();
+    await request(port, 'POST', '/api/journey/mansi/feed/read', jsonBody({ ids: [msgId(11)] }));
+    await request(port, 'PUT', '/api/journey/mansi/progress', jsonBody(snapshot(7)));
+    await settled();
+    up();
+    stub.seen.length = 0;
+    expect((await request(port, 'POST', '/api/quit', { headers: { 'x-course-player': '1' } })).status).toBe(202);
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0), { timeout: 3000 });
+    expect(stub.seen.map((s) => s.url)).toEqual(['/api/player/feed/read', '/api/player/progress']);
   });
 });
 

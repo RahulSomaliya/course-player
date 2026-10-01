@@ -1,211 +1,172 @@
-// "Course content": section rows that expand into lecture lists. Part folders ("Part 1 - React
-// Fundamentals (4 Projects)") are quiet group headings with their lectures beneath, never rows.
-// Used on Home (variant "page") and as the Watch sidebar (variant "sidebar").
-import { ChevronDown, FileText, Paperclip } from 'lucide-react';
-import { memo, useEffect, useRef, useState } from 'react';
-import type { Lecture, LectureProgress, Section } from '../../../shared/types';
+// Home "Course content" (docs/spec-v2-coaching.md "Course content"). Parts are a real level: overline
+// "PART 1", title, quiet "4 projects", and their sections nested under a hairline, with the part's own
+// intro lectures as a collapsible "Part introduction" row. A closed section row is only number ·
+// title · a quiet ✓ when done; its length (and due date) show on hover/focus. The section she is in
+// carries a dot on the hairline and its due date; §04 (skipped by her plan) is dimmed. Lectures render
+// only while their section is open. (The Watch sidebar is screens/watch/SectionPanel.tsx.)
+import { ChevronDown } from 'lucide-react';
+import { memo, useCallback, useState } from 'react';
+import type { LectureProgress, Section } from '../../../shared/types';
 import { useApp } from '../app/context';
-import { sectionProgress } from '../lib/course';
-import { formatDuration, plural } from '../lib/format';
-import { hrefFor } from '../lib/router';
+import { buildOutline, sectionMeta, type PlanDates } from '../lib/outline';
+import { plural } from '../lib/format';
 import { useProgress } from '../state/progress';
-import { LectureStatus, ProgressLine } from './ui';
+import { Collapse } from './Collapse';
+import { LectureList } from './LectureList';
+import { QuietCheck } from './ui';
 
-type Variant = 'page' | 'sidebar';
 type Lectures = Record<string, LectureProgress>;
 
 interface Props {
-  variant: Variant;
-  /** this lecture's section starts expanded (and, in the sidebar, the lecture is highlighted + scrolled to) */
+  /** the Continue lecture: its section starts open and carries the "you're here" mark */
   currentId: string | null;
+  plan: PlanDates;
 }
 
-export function CourseContent({ variant, currentId }: Props) {
+export function CourseContent({ currentId, plan }: Props) {
   const { course, index } = useApp();
   const lectures = useProgress((s) => s.lectures);
   const currentSection = currentId === null ? null : (index.byId.get(currentId)?.section.id ?? null);
-  const [open, setOpen] = useState<Set<string>>(() => new Set(currentSection ? [currentSection] : []));
-  const list = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set(currentSection ? [currentSection] : []));
+  const outline = buildOutline(course);
 
-  // Following a lecture change (sidebar Next / Up next), open its section too.
-  useEffect(() => {
-    if (currentSection) setOpen((prev) => (prev.has(currentSection) ? prev : new Set(prev).add(currentSection)));
-  }, [currentSection]);
+  const toggle = useCallback(
+    (id: string): void =>
+      setOpen((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      }),
+    [],
+  );
 
-  // Sidebar: bring the current lecture into view inside the sidebar's own scroller only — never the
-  // page (scrollIntoView would also scroll the window and yank the player off-screen).
-  // Lands on a boundary: the current section's header at the top edge, or — when the lecture sits too
-  // deep in a long section for that — the first row a third of the way up. (`rowTop − height/3` alone
-  // cut a row in half under the "Course content" header.) Re-runs when the current section OPENS, not on
-  // every toggle: depending on the whole `open` set yanked the list back while browsing other sections.
-  const currentOpen = currentSection !== null && open.has(currentSection);
-  useEffect(() => {
-    if (variant !== 'sidebar' || currentId === null) return;
-    const root = list.current;
-    const scroller = root?.closest<HTMLElement>('[data-scroller]');
-    const row = root?.querySelector<HTMLElement>('[aria-current="page"]');
-    if (!root || !scroller || !row || scroller.scrollHeight <= scroller.clientHeight) return;
-    const origin = scroller.getBoundingClientRect().top - scroller.scrollTop;
-    const offset = (el: Element): number => el.getBoundingClientRect().top - origin;
-    const rowTop = offset(row);
-    const head = row.closest('[data-section]')?.querySelector('[data-section-head]');
-    let top = head ? offset(head) : rowTop;
-    if (rowTop + row.offsetHeight > top + scroller.clientHeight) {
-      const want = rowTop - scroller.clientHeight / 3;
-      const edges = [...root.querySelectorAll('[data-section-head], li > a')].map(offset);
-      top = edges.find((t) => t >= want) ?? rowTop;
-    }
-    scroller.scrollTop = Math.max(0, top);
-  }, [variant, currentId, currentOpen]);
-
-  const toggle = (id: string): void =>
-    setOpen((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  const row = (s: Section, nested: boolean, intro = false) => (
+    <SectionRow
+      key={s.id}
+      section={s}
+      nested={nested}
+      intro={intro}
+      lectures={lectures}
+      plan={plan}
+      current={s.id === currentSection}
+      currentId={s.id === currentSection ? currentId : null}
+      open={open.has(s.id)}
+      onToggle={toggle}
+    />
+  );
 
   return (
-    <div ref={list} className={variant === 'page' ? '' : 'pb-6'}>
-      {course.sections.map((s) =>
-        s.part ? (
-          <PartGroup key={s.id} section={s} lectures={lectures} variant={variant} currentId={currentId} />
+    <div>
+      {outline.map((node) =>
+        node.kind === 'section' ? (
+          <div key={node.section.id} className="pt-2">
+            {row(node.section, false)}
+          </div>
         ) : (
-          <SectionRow
-            key={s.id}
-            section={s}
-            lectures={lectures}
-            variant={variant}
-            currentId={currentSection === s.id ? currentId : null}
-            open={open.has(s.id)}
-            onToggle={toggle}
-          />
+          <section key={node.intro.id} aria-labelledby={`part-${node.number}`} className="pt-10">
+            <p className="px-2 text-xs font-semibold uppercase tracking-[0.08em] text-ink-muted">Part {node.number}</p>
+            <h3 id={`part-${node.number}`} className="mt-1 px-2 text-lg font-semibold text-ink">
+              {node.title}
+              {node.projects !== null && <span className="ml-2 whitespace-nowrap text-sm font-normal text-ink-subtle">{plural(node.projects, 'project')}</span>}
+            </h3>
+            {/* the nested group: a hairline the "you're here" dot sits on */}
+            <div className="ml-2 mt-3 border-l border-line pl-3 sm:pl-4">
+              {row(node.intro, true, true)}
+              {node.sections.map((s) => row(s, true))}
+            </div>
+          </section>
         ),
       )}
     </div>
   );
 }
 
-function PartGroup({ section, lectures, variant, currentId }: { section: Section; lectures: Lectures; variant: Variant; currentId: string | null }) {
-  const part = section.part as NonNullable<Section['part']>;
-  const projects = part.projects === null ? '' : ` · ${plural(part.projects, 'project')}`;
-  return (
-    <div data-section className={variant === 'page' ? 'pb-2 pt-10' : 'pb-1 pt-6'}>
-      <p data-section-head className={`text-xs font-semibold uppercase tracking-[0.08em] text-ink-muted ${variant === 'page' ? 'px-2' : 'px-4'}`}>
-        Part {part.number} · {section.title}
-        <span className="font-medium text-ink-subtle">{projects}</span>
-      </p>
-      <ul className={variant === 'page' ? 'mt-2' : 'mt-1'}>
-        {section.lectures.map((l) => (
-          <LectureRow key={l.id} lecture={l} progress={lectures[l.id]} variant={variant} current={l.id === currentId} />
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 const SectionRow = memo(function SectionRow({
   section,
+  nested,
+  intro,
   lectures,
-  variant,
+  plan,
+  current,
   currentId,
   open,
   onToggle,
 }: {
   section: Section;
+  /** inside a part's group (the dot then sits on its hairline) */
+  nested: boolean;
+  intro: boolean;
   lectures: Lectures;
-  variant: Variant;
+  plan: PlanDates;
+  current: boolean;
   currentId: string | null;
   open: boolean;
   onToggle: (id: string) => void;
 }) {
-  const { done, total } = sectionProgress(section, lectures);
-  const pct = total === 0 ? 0 : (done / total) * 100;
-  const panelId = `section-${section.id}-${variant}`;
-  const page = variant === 'page';
+  const meta = sectionMeta(section, lectures, plan);
+  const panelId = `section-${section.id}`;
+  // always visible: the current section's due date, or "Skipped"; the rest only on hover/focus
+  const shownMeta = meta.skipped ? 'Skipped' : current ? meta.due : null;
+  const hoverMeta = current || meta.skipped ? meta.length : [meta.length, meta.due].filter(Boolean).join(' · ');
   return (
-    <div data-section className={page ? 'border-b border-line' : ''}>
-      <h3 data-section-head>
+    <div data-section={section.id} data-current={current ? 'true' : undefined} className="relative">
+      {current && (
+        // Centred on the part's 1 px hairline: −(group padding 12/16 px + 0.5 px + half the dot). A loose
+        // section (§01, a fresh learner's first) has no hairline: the dot sits in the gutter instead.
+        <span
+          aria-hidden="true"
+          className={`absolute top-[21px] size-2 rounded-full bg-accent ${nested ? '-left-[16.5px] sm:-left-[20.5px]' : '-left-3'}`}
+        />
+      )}
+      <h4>
         <button
           type="button"
           aria-expanded={open}
           aria-controls={panelId}
           onClick={() => onToggle(section.id)}
-          className={`group flex w-full items-start gap-3 text-left hover:bg-fill ${page ? 'rounded-md px-2 py-4' : 'px-4 py-3'}`}
+          // items-start + 24 px line boxes: number, ✓ and chevron sit on the FIRST line of a title that
+          // wraps (phones), level with the "you're here" dot (top 21 px = py-3 + half a line − half the dot).
+          className="group flex w-full items-start gap-3 rounded-md px-2 py-3 text-left leading-6 hover:bg-fill"
         >
-          <span className="w-6 shrink-0 pt-px text-sm tabular-nums text-ink-subtle">{section.id}</span>
-          <span className="min-w-0 flex-1">
-            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className={`font-medium text-ink ${page ? 'text-base' : 'text-sm'}`}>{section.title}</span>
-              {section.optional && (
-                <span className="rounded-full border border-line px-2 py-px text-[11px] font-medium leading-4 text-ink-muted">Optional</span>
-              )}
-            </span>
-            <span className="mt-2 flex items-center gap-3">
-              <ProgressLine value={pct} className={page ? 'w-32 sm:w-48' : 'w-20'} />
-              <span className="text-xs tabular-nums text-ink-muted">
-                {done} / {total}
-                <span className="text-ink-subtle"> · {formatDuration(section.duration)}</span>
+          <span className={`w-6 shrink-0 text-sm leading-6 tabular-nums ${current ? 'text-accent-ink' : 'text-ink-subtle'}`}>{intro ? '' : section.id}</span>
+          <span
+            className={`min-w-0 flex-1 text-[15px] leading-6 ${current ? 'font-semibold text-ink' : meta.skipped ? 'text-ink-subtle' : intro ? 'text-ink-muted' : 'font-medium text-ink'}`}
+          >
+            {intro ? 'Part introduction' : section.title}
+            {current && <span className="sr-only"> — you’re here</span>}
+            {/* phones: the due date goes under the title instead of squeezing it */}
+            {current && meta.due && <span className="block text-sm font-normal text-ink-muted sm:hidden">{meta.due}</span>}
+          </span>
+          {meta.skipped && <span className="shrink-0 text-xs font-medium leading-6 text-ink-subtle sm:hidden">Skipped</span>}
+          {/* ≥ sm: one right-aligned column, so "due …" / "Skipped" line up row to row. Hover/focus adds the
+              length (and the due date of other sections) to its left; it is in flow but transparent, and
+              right alignment keeps the always-visible part still. */}
+          <span className="hidden w-48 shrink-0 text-right text-sm sm:block">
+            {hoverMeta && (
+              <span className="hidden tabular-nums text-ink-subtle opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100 group-focus-visible:opacity-100 sm:inline">
+                {hoverMeta}
+                {shownMeta && ' · '}
               </span>
-            </span>
+            )}
+            {shownMeta && <span className={meta.skipped ? 'text-xs font-medium text-ink-subtle' : 'text-ink-muted'}>{shownMeta}</span>}
+          </span>
+          <span className="flex h-6 w-4 shrink-0 items-center justify-center">
+            <QuietCheck done={meta.done} />
+            {meta.done && <span className="sr-only">, done</span>}
           </span>
           <ChevronDown
-            className={`mt-0.5 size-4 shrink-0 text-ink-subtle transition-transform duration-200 ease-out group-hover:text-ink-muted ${open ? 'rotate-180' : ''}`}
+            className={`hover-reveal mt-1 size-4 shrink-0 text-ink-subtle transition-[transform,opacity] duration-200 ease-out ${
+              open ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'
+            }`}
             strokeWidth={1.5}
             aria-hidden="true"
           />
         </button>
-      </h3>
-      <ul id={panelId} hidden={!open} className={page ? 'pb-4 pl-9' : 'pb-2'}>
-        {open &&
-          section.lectures.map((l) => (
-            <LectureRow key={l.id} lecture={l} progress={lectures[l.id]} variant={variant} current={l.id === currentId} />
-          ))}
-      </ul>
+      </h4>
+      <Collapse open={open} id={panelId}>
+        {(entering) => <LectureList section={section} lectures={lectures} currentId={currentId} entering={entering} className="pb-3 pl-7" />}
+      </Collapse>
     </div>
   );
 });
-
-function LectureRow({ lecture, progress, variant, current }: { lecture: Lecture; progress: LectureProgress | undefined; variant: Variant; current: boolean }) {
-  const done = progress?.done ?? false;
-  const fraction = lecture.duration > 0 ? (progress?.pos ?? 0) / lecture.duration : 0;
-  const page = variant === 'page';
-  const status = done ? 'done' : fraction > 0.02 ? 'partly watched' : 'not started';
-  return (
-    <li>
-      <a
-        href={hrefFor({ name: 'watch', id: lecture.id })}
-        aria-current={current ? 'page' : undefined}
-        className={`group flex items-start gap-3 hover:bg-fill ${page ? 'rounded-md px-2 py-2' : 'px-4 py-2'} ${
-          current ? 'bg-fill' : ''
-        }`}
-      >
-        <span className="pt-px">
-          <LectureStatus done={done} fraction={fraction} />
-        </span>
-        <span className="sr-only">{status}: </span>
-        <span className={`min-w-0 flex-1 text-sm ${current ? 'font-medium text-ink' : 'text-ink'}`}>
-          <span className="tabular-nums text-ink-subtle">{lecture.number}.</span> {lecture.title}
-        </span>
-        <span className="flex shrink-0 items-center gap-2 pt-px text-xs tabular-nums text-ink-subtle">
-          {lecture.resources.length > 0 && (
-            <span className="inline-flex items-center gap-0.5" title={plural(lecture.resources.length, 'resource')}>
-              <Paperclip className="size-3" strokeWidth={1.5} aria-hidden="true" />
-              {lecture.resources.length}
-              <span className="sr-only"> {lecture.resources.length === 1 ? 'resource' : 'resources'}</span>
-            </span>
-          )}
-          {lecture.kind === 'video' ? (
-            formatDuration(lecture.duration) === '0m' ? '<1m' : formatDuration(lecture.duration)
-          ) : (
-            <span className="inline-flex items-center gap-1">
-              <FileText className="size-3" strokeWidth={1.5} aria-hidden="true" />
-              {lecture.kind === 'article' ? 'Article' : 'PDF'}
-            </span>
-          )}
-        </span>
-      </a>
-    </li>
-  );
-}

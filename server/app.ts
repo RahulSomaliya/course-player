@@ -10,10 +10,10 @@
 import { mkdir } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { BootPayload, Course, JourneySession, ProgressState } from '../shared/types.ts';
+import type { BootPayload, Course, JourneySession, ProgressSnapshot, ProgressState } from '../shared/types.ts';
 import { ConfigStore, PROFILE_ID_RE } from './config.ts';
 import { HttpError, readJsonBody, sendEmpty, sendJson } from './http.ts';
-import { Journey, validateSession } from './journey.ts';
+import { Journey, parseReadIds, validateProgressSnapshot, validateSession } from './journey.ts';
 import { errorMessage, type Log } from './log.ts';
 import { serveMedia } from './media.ts';
 import { courseIdFor, scanCourse } from './scan.ts';
@@ -21,6 +21,10 @@ import { serveStatic } from './static.ts';
 import { ProgressStore, validateProgress } from './store.ts';
 
 const BODY_LIMIT = 2 * 1024 * 1024;
+const CURSOR_MAX = 1000;
+/** Set on a feed served from the last good copy (JS Journey unreachable or failing). shared/types.ts
+ *  names it in the route list; the web app reads it to say the feed may be out of date. */
+const STALE_HEADER = 'x-course-player-stale';
 
 export interface AppOptions {
   root: string;
@@ -167,6 +171,46 @@ export async function createCourseServer(opts: AppOptions): Promise<CourseServer
           const problem = validateSession(body, courseId);
           if (problem !== null) throw new HttpError(400, problem);
           const state = await journey.enqueue(profile, body as JourneySession); // shape proved just above
+          if (state === null) throw new HttpError(409, 'This profile is not connected to JS Journey');
+          sendJson(res, 202, state);
+        },
+      },
+    },
+    {
+      pattern: /^\/api\/journey\/([^/]+)\/feed$/,
+      methods: {
+        GET: async ({ req, res, params }) => {
+          const profile = profileParam(params[0] as string);
+          const cursor = new URL(req.url ?? '/', 'http://localhost').searchParams.get('cursor') || null; // "" = first page
+          if (cursor !== null && cursor.length > CURSOR_MAX) throw new HttpError(400, 'cursor is too long');
+          const result = await journey.feed(profile, cursor);
+          if (result === null) sendEmpty(res, 204);
+          else sendJson(res, 200, result.feed, result.stale ? { [STALE_HEADER]: '1' } : {});
+        },
+      },
+    },
+    {
+      pattern: /^\/api\/journey\/([^/]+)\/feed\/read$/,
+      methods: {
+        POST: async ({ req, res, params }) => {
+          const profile = profileParam(params[0] as string);
+          const parsed = parseReadIds(await readJsonBody(req, BODY_LIMIT));
+          if (!parsed.ok) throw new HttpError(400, parsed.error);
+          const state = await journey.enqueueReads(profile, parsed.ids);
+          if (state === null) throw new HttpError(409, 'This profile is not connected to JS Journey');
+          sendJson(res, 202, state);
+        },
+      },
+    },
+    {
+      pattern: /^\/api\/journey\/([^/]+)\/progress$/,
+      methods: {
+        PUT: async ({ req, res, params }) => {
+          const profile = profileParam(params[0] as string);
+          const body = await readJsonBody(req, BODY_LIMIT);
+          const problem = validateProgressSnapshot(body, courseId);
+          if (problem !== null) throw new HttpError(400, problem);
+          const state = await journey.enqueueProgress(profile, body as ProgressSnapshot); // shape proved just above
           if (state === null) throw new HttpError(409, 'This profile is not connected to JS Journey');
           sendJson(res, 202, state);
         },

@@ -1,5 +1,5 @@
 // Display formatting. Times in the player: "12:31" / "1:02:03". Study time and course length: "1h 12m".
-import { dayAndMonth, dayOfWeekLabel } from './dates';
+import { dayAndMonth, dayOfWeekLabel, daysBetween, localDateKey } from './dates';
 
 export function formatClock(seconds: number): string {
   const total = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
@@ -24,14 +24,24 @@ export function formatDay(key: string): string {
   return `${dayOfWeekLabel(key)} ${day} ${month}`;
 }
 
-/** "12 Dec"; "8 Jan 2027" when `reference` (today) is given and the year differs — a far-off finish
- *  estimate must not read as this year. */
-export function formatShortDate(key: string, reference?: string): string {
+/** "12 Dec" */
+export function formatShortDate(key: string): string {
   const { day, month } = dayAndMonth(key);
-  const year = key.slice(0, 4);
-  return reference !== undefined && reference.slice(0, 4) !== year ? `${day} ${month} ${year}` : `${day} ${month}`;
+  return `${day} ${month}`;
 }
 
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
+}
+
+/** When Rahul wrote a message: "Today 21:05" · "Yesterday 07:00" · "Sat 18:30" · "Tue 22 Sep". */
+export function formatMessageTime(iso: string, today: string): string {
+  const d = new Date(iso);
+  const key = localDateKey(d);
+  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const ago = daysBetween(key, today);
+  if (ago <= 0) return `Today ${time}`;
+  if (ago === 1) return `Yesterday ${time}`;
+  if (ago < 7) return `${dayOfWeekLabel(key)} ${time}`;
+  return formatDay(key);
 }

@@ -1,5 +1,5 @@
 // Primitives shared by every screen. Token classes only (docs/design.md) — no raw colours here.
-import { forwardRef, useEffect, useRef, type AnchorHTMLAttributes, type ButtonHTMLAttributes, type ReactNode, type RefObject } from 'react';
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type AnchorHTMLAttributes, type ButtonHTMLAttributes, type ReactNode, type RefObject } from 'react';
 
 type Variant = 'primary' | 'secondary' | 'ghost';
 type Size = 'sm' | 'md' | 'lg';
@@ -81,35 +81,70 @@ export function ProgressLine({ value, className = '', label }: { value: number; 
   );
 }
 
-/** done: accent disc + tick · partly watched: accent arc · not started: hairline circle. */
-export function LectureStatus({ done, fraction, className = 'size-[18px]' }: { done: boolean; fraction: number; className?: string }) {
-  if (done) {
+/** True for the render where `done` turned true after mount — the ✓ draws in only on that change,
+ *  never on first render (a list of 400 done lectures must not animate on open). A layout effect, so
+ *  the class lands before the first paint of the change and the tick never flashes in fully first. */
+function useBecameDone(done: boolean): boolean {
+  const prev = useRef(done);
+  const [drawn, setDrawn] = useState(false);
+  useLayoutEffect(() => {
+    if (done && !prev.current) setDrawn(true);
+    if (!done) setDrawn(false);
+    prev.current = done;
+  }, [done]);
+  return drawn;
+}
+
+const TICK = 'M5.2 9.3l2.4 2.4 5-5.1';
+
+/** Lecture rows: done = accent disc + ✓ · current = accent dot · plain = hairline circle. */
+export function LectureMark({ state, className = 'size-[18px]' }: { state: 'done' | 'current' | 'plain'; className?: string }) {
+  const drawn = useBecameDone(state === 'done');
+  if (state === 'done') {
     return (
       <svg viewBox="0 0 18 18" className={`shrink-0 ${className}`} aria-hidden="true">
-        <circle cx="9" cy="9" r="9" className="fill-accent" />
-        <path d="M5.2 9.3l2.4 2.4 5-5.1" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="stroke-on-accent" />
+        <circle cx="9" cy="9" r="9" className={`origin-center fill-accent ${drawn ? 'animate-disc-in' : ''}`} />
+        <path
+          d={TICK}
+          pathLength={1}
+          strokeDasharray="1"
+          fill="none"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={`stroke-on-accent ${drawn ? 'animate-draw' : ''}`}
+        />
       </svg>
     );
   }
-  const r = 7.25;
-  const c = 2 * Math.PI * r;
-  const f = Math.max(0, Math.min(1, fraction));
   return (
-    <svg viewBox="0 0 18 18" className={`shrink-0 -rotate-90 ${className}`} aria-hidden="true">
-      <circle cx="9" cy="9" r={r} fill="none" strokeWidth="1.5" className="stroke-line" />
-      {f > 0.02 && (
-        <circle cx="9" cy="9" r={r} fill="none" strokeWidth="2" strokeLinecap="round" strokeDasharray={`${f * c} ${c}`} className="stroke-accent" />
+    <svg viewBox="0 0 18 18" className={`shrink-0 ${className}`} aria-hidden="true">
+      {state === 'current' ? (
+        <circle cx="9" cy="9" r="4" className="fill-accent" />
+      ) : (
+        <circle cx="9" cy="9" r="7.25" fill="none" strokeWidth="1.5" className="stroke-line" />
       )}
     </svg>
   );
 }
 
-export function Avatar({ name, size = 'md' }: { name: string; size?: 'sm' | 'md' | 'xl' }) {
-  const box = size === 'xl' ? 'size-28 text-5xl rounded-lg' : size === 'md' ? 'size-8 text-sm rounded-full' : 'size-6 text-xs rounded-full';
+/** A finished section's quiet ✓ (no disc), drawn in when the section is finished while she watches. */
+export function QuietCheck({ done, className = 'size-4' }: { done: boolean; className?: string }) {
+  const drawn = useBecameDone(done);
+  if (!done) return null;
   return (
-    <span aria-hidden="true" className={`${box} inline-flex shrink-0 select-none items-center justify-center bg-fill-strong font-semibold text-ink`}>
-      {name.trim().charAt(0).toUpperCase() || '?'}
-    </span>
+    <svg viewBox="0 0 18 18" className={`shrink-0 ${className}`} aria-hidden="true">
+      <path
+        d={TICK}
+        pathLength={1}
+        strokeDasharray="1"
+        fill="none"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={`stroke-accent ${drawn ? 'animate-draw' : ''}`}
+      />
+    </svg>
   );
 }
 

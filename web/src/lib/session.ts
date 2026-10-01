@@ -1,12 +1,17 @@
-// Study sessions (spec "Study sessions"). Pure helpers; web/src/state/study.ts drives them.
-// A session starts with the first studied second and ends on "End session", Quit, or 20 min without
-// studying. Sessions under 5 min are never sent to JS Journey (they still count in local stats, which
-// read ProgressState.days, not sessions).
-import type { JourneySession } from '../../../shared/types';
+// Study sessions = what she studied since her last sign-off (docs/spec-v2-coaching.md "Sign-off card").
+// Pure helpers; web/src/state/study.ts drives them. A session starts with the first studied second and
+// ends only when she signs off (or the 24 h rule sends it for her). Local stats read ProgressState.days,
+// not sessions, so a session that is never sent still counts there.
+import type { JourneySession, ProgressSnapshot } from '../../../shared/types';
 import { localDateKey } from './dates';
 
 export const SESSION_IDLE_MS = 20 * 60_000;
+/** a session under 5 min is sent only with a note */
 export const MIN_SEND_SECONDS = 5 * 60;
+/** JS Journey refuses minutes > 1440 with a 400, and the outbox drops a 4xx'd update for good */
+export const MAX_UPDATE_MINUTES = 1440;
+/** an unsigned session older than this (since its last studied second) is sent with autoClosed: true */
+export const PENDING_MAX_AGE_MS = 24 * 3_600_000;
 export const MOODS = ['😄', '🙂', '😐', '😩'] as const;
 export type Mood = (typeof MOODS)[number];
 
@@ -47,7 +52,9 @@ export function accumulate(s: LiveSession | null, now: number, seconds: number, 
   };
 }
 
-export function isIdle(s: LiveSession, now: number): boolean {
+/** 20 min without studying: the session stops growing and waits for her note (the header's dot).
+ *  Nothing is sent by itself any more (v2) — see state/study.ts for what happens next. */
+export function isWaiting(s: LiveSession, now: number): boolean {
   return now - s.lastStudyAt > SESSION_IDLE_MS;
 }
 
@@ -79,24 +86,57 @@ export function mainSection(s: LiveSession): number {
   return best;
 }
 
-export function toJourneySession(
-  s: LiveSession,
-  opts: { courseId: string; endedAt: number; mood: Mood | null; note: string | null },
-): JourneySession | null {
-  if (s.seconds < MIN_SEND_SECONDS) return null;
-  const note = opts.note?.trim() ?? '';
+/** What one sign-off card step is about: an earlier sitting, this one, or nothing (a note-only update). */
+export type SignOffTarget = { kind: 'pending'; session: LiveSession } | { kind: 'live'; session: LiveSession } | { kind: 'note' };
+
+export interface SignOffAnswer {
+  mood: Mood | null;
+  note: string | null;
+  /** she ticked "I'm stuck" — the coach view flags the update */
+  stuck: boolean;
+}
+
+export interface UpdateOptions {
+  courseId: string;
+  /** id for a note-only update (no session): a fresh uuid, so a retried POST dedups */
+  noteId: string;
+  now: number;
+  answer: SignOffAnswer;
+  /** true when the player sends it without her (the 24 h rule) */
+  autoClosed: boolean;
+  progress: ProgressSnapshot | null;
+  /** her current section, for a note-only update — never 0: JS Journey 400s it (StudyController.deliver) */
+  fallbackSection: number;
+}
+
+/**
+ * One sign-off = one update for Rahul (docs/spec-v2-coaching.md "Sign-off card").
+ * - A session under 5 min with no note is not sent (null); with a note it is.
+ * - No session at all + a note = a note-only update (she studied away from the player): minutes 0.
+ * - endedAt is the last studied second, not the moment she pressed Send (the note may come later).
+ */
+export function toUpdate(s: LiveSession | null, o: UpdateOptions): JourneySession | null {
+  const note = o.answer.note?.trim() ?? '';
+  const seconds = s?.seconds ?? 0;
+  if (note === '' && seconds < MIN_SEND_SECONDS) return null;
+  const startedAt = s?.startedAt ?? o.now;
+  const endedAt = s === null ? o.now : Math.max(s.lastStudyAt, s.startedAt);
   return {
-    id: s.id,
-    course: opts.courseId,
-    startedAt: new Date(s.startedAt).toISOString(),
-    endedAt: new Date(Math.max(opts.endedAt, s.startedAt)).toISOString(),
-    studyDate: localDateKey(new Date(s.startedAt)),
-    minutes: Math.max(1, Math.round(s.seconds / 60)),
-    sectionNumber: mainSection(s),
-    lecturesCompleted: s.lecturesCompleted.map(({ section, lecture, title }) => ({ section, lecture, title })),
-    finishedSections: [...s.finishedSections],
-    mood: opts.mood,
+    id: s?.id ?? o.noteId,
+    course: o.courseId,
+    startedAt: new Date(startedAt).toISOString(),
+    endedAt: new Date(endedAt).toISOString(),
+    studyDate: localDateKey(new Date(startedAt)),
+    // 0 only for a note-only update (shared/types.ts); a 20 s session with a note rounds to 0 too.
+    minutes: Math.min(MAX_UPDATE_MINUTES, Math.round(seconds / 60)),
+    sectionNumber: s !== null && seconds > 0 ? mainSection(s) : o.fallbackSection,
+    lecturesCompleted: (s?.lecturesCompleted ?? []).map(({ section, lecture, title }) => ({ section, lecture, title })),
+    finishedSections: [...(s?.finishedSections ?? [])],
+    mood: o.answer.mood,
     note: note === '' ? null : note.slice(0, 2000),
+    stuck: o.answer.stuck,
+    autoClosed: o.autoClosed,
+    progress: o.progress,
   };
 }
 

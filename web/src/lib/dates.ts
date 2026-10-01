@@ -36,6 +36,11 @@ export function daysBetween(a: string, b: string): number {
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 export const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
 
+/** ISO weekday: 1 = Mon … 7 = Sun (JourneyStatus.studyWeekdays) */
+export function isoWeekday(key: string): number {
+  return new Date(utcOf(key)).getUTCDay() || 7;
+}
+
 export function dayOfWeekLabel(key: string): string {
   return WEEKDAYS[new Date(utcOf(key)).getUTCDay()] as string;
 }

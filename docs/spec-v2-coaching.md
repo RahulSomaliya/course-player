@@ -74,11 +74,17 @@ localStorage too (the server also serves its last good copy when offline).
 
 ### This week + stats (no more ETA)
 - "This week" block from `JourneyStatus`: Week 3 of 10 · goal "Finish §12 Effects and Data
-  Fetching by Fri 23 Oct" · pace pill (Ahead by N days / On track / Behind by N days) · course due
-  "Fri 25 Dec". During a break: "Diwali break · back Mon 16 Nov" instead of a pace.
+  Fetching by Fri 23 Oct" · pace pill (Ahead by N days / On track / Behind by N days). No course due
+  date — the Due stat right below shows it (Rahul, 2026-10-01). During a break: "Diwali break · back
+  Mon 16 Nov" instead of a pace.
 - Stats row (max 4): Today · Streak · Complete (% + n / total lectures) · **Due** (course target date
   + pace word). Remove the finish-date projection and its code. Not connected / offline → Due shows
   the last cached status, else is omitted.
+- Streak = STUDY days (Rahul, 2026-10-01; a calendar-day streak reset every weekend and all of Diwali).
+  Walk back from today: ≥ 5 min adds 1 (weekend / break days too); a plan study day under 5 min ends
+  it, except today while in progress; a weekend / break day under 5 min is skipped. The calendar is
+  `JourneyStatus.studyWeekdays` + `planBreaks` (cached with the status); no status → Mon–Fri, no
+  breaks. JS Journey's coach view computes the same number (`lib/stats.ts`).
 
 ### Course content (home)
 - Part header = a real level above sections: overline "PART 1", title "React Fundamentals", quiet
