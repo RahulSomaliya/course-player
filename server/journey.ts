@@ -460,7 +460,13 @@ const isDeliveredReceipt = (x: unknown): x is DeliveredReceipt => isRecord(x) &&
 
 /** `pending` counts her queued updates only: receipts and the snapshot ride along without a badge, and a
  *  rejected update waits for a retry, not for the next flush. `updates`: one entry per id (queued beats
- *  rejected beats delivered), newest `at` first — shared/types.ts OutboxUpdate. */
+ *  rejected beats delivered): the waiting ones first (queued, then rejected), then the receipts, each newest
+ *  `at` first — shared/types.ts OutboxUpdate. Never one `at` ordering across states: a queued `at` is when the
+ *  session ENDED, a receipt's is when JS Journey took it, so a receipt stamped now outranked a queued update
+ *  that ended earlier and `updates[0]` was no longer the one waiting (a test failed once the wall clock
+ *  passed its fixture's endedAt, 2026-10-05). */
+const STATE_RANK: Record<OutboxUpdate['state'], number> = { queued: 0, rejected: 1, delivered: 2 };
+
 function view(o: OutboxFile): OutboxState {
   const listed = new Set<string>();
   const updates: OutboxUpdate[] = [];
@@ -476,7 +482,7 @@ function view(o: OutboxFile): OutboxState {
   for (const d of o.delivered) {
     if (!listed.has(d.id)) updates.push({ id: d.id, state: 'delivered', at: d.at, error: null });
   }
-  updates.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  updates.sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || Date.parse(b.at) - Date.parse(a.at));
   return { pending: o.items.length, lastError: o.lastError, updates };
 }
 const hasWork = (o: OutboxFile): boolean => o.items.length > 0 || o.reads.length > 0 || o.progress !== null;

@@ -312,6 +312,7 @@ export interface OutboxState {
   /** what went wrong in the latest delivery attempt (any kind: update, read receipt, snapshot); null once
    *  a delivery went through cleanly (v2 field) */
   lastError: string | null;
-  /** v3: every queued and rejected update + receipts of the last 50 delivered ones, newest `at` first */
+  /** v3: every queued and rejected update + receipts of the last 50 delivered ones: queued, then
+   *  rejected, then delivered, each newest `at` first (`at` means a different moment per state) */
   updates: OutboxUpdate[];
 }

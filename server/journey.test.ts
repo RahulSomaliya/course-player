@@ -967,7 +967,7 @@ describe('v3 outbox: every update reaches Rahul or stays visible', () => {
     expect((await outboxOnDisk()).delivered).toHaveLength(50);
   });
 
-  it('lists updates newest first: queued (at = endedAt), rejected (at = when refused), delivered receipts', async () => {
+  it('lists the waiting updates first (queued, then rejected), then receipts — never one `at` order across states', async () => {
     await writeFile(
       path.join(dir, 'outbox-mansi.json'),
       JSON.stringify({
@@ -982,9 +982,10 @@ describe('v3 outbox: every update reaches Rahul or stays visible', () => {
     );
     await config.setJourneyLink('mansi', null); // nothing is sent while we look
     expect((await journey.outbox('mansi')).updates).toEqual([
-      { id: 'd', state: 'delivered', at: '2026-10-05T13:00:00.000Z', error: null },
       { id: 'q', state: 'queued', at: '2026-10-05T12:00:00.000Z', error: null, session: session('q', { endedAt: '2026-10-05T12:00:00.000Z' }) },
       { id: 'r', state: 'rejected', at: '2026-10-05T11:00:00.000Z', error: 'HTTP 400 — nope', session: session('r') },
+      // a receipt stamped later than the queued update's end still sorts after it
+      { id: 'd', state: 'delivered', at: '2026-10-05T13:00:00.000Z', error: null },
     ]);
   });
 
