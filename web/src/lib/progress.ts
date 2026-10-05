@@ -71,9 +71,15 @@ export function withDone(s: ProgressState, id: string, done: boolean, now: numbe
   return withLecture(s, id, { ...prev, done, doneAt }, now);
 }
 
-export function withStudy(s: ProgressState, dayKey: string, seconds: number, now: number): ProgressState {
-  if (seconds <= 0) return s;
-  return { ...s, updatedAt: now, days: { ...s.days, [dayKey]: (s.days[dayKey] ?? 0) + seconds } };
+/** A sign-off's study time, already split over the days the session spanned (lib/session.ts
+ *  splitAcrossDays). v3: the only writer of `days` — the v2 per-second ticker no longer adds to it
+ *  (state/study.ts), or every studied second would count twice. */
+export function withStudyDays(s: ProgressState, add: Record<string, number>, now: number): ProgressState {
+  const entries = Object.entries(add).filter(([, seconds]) => seconds > 0);
+  if (entries.length === 0) return s;
+  const days = { ...s.days };
+  for (const [key, seconds] of entries) days[key] = (days[key] ?? 0) + seconds;
+  return { ...s, updatedAt: now, days };
 }
 
 export function withLast(s: ProgressState, id: string, now: number): ProgressState {

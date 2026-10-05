@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addDays, dayOfWeekLabel, daysBetween, localDateKey } from './dates';
-import { formatClock, formatDay, formatDuration, formatMessageTime, formatShortDate } from './format';
+import { formatClock, formatDay, formatDuration, formatElapsed, formatMessageTime, formatShortDate, formatSpokenDuration, formatTimeOfDay } from './format';
 
 describe('localDateKey', () => {
   it('uses the local calendar, so a late-night session lands on the right day', () => {
@@ -68,5 +68,26 @@ describe('formatMessageTime (when Rahul wrote)', () => {
     expect(formatMessageTime(at(29, 7, 0), today)).toBe('Yesterday 07:00');
     expect(formatMessageTime(at(26, 18, 30), today)).toBe('Sat 18:30');
     expect(formatMessageTime(at(22, 9, 0), today)).toBe('Tue 22 Sep');
+  });
+});
+
+describe('the study timer (header chip + sign-off card, spec v3 A4)', () => {
+  it('formatElapsed: "<1m" · "12m" · "1h 23m" — never a bare 0', () => {
+    expect(formatElapsed(0)).toBe('<1m');
+    expect(formatElapsed(59)).toBe('<1m');
+    expect(formatElapsed(12 * 60 + 59)).toBe('12m');
+    expect(formatElapsed(83 * 60)).toBe('1h 23m');
+    expect(formatElapsed(120 * 60)).toBe('2h');
+  });
+  it('formatSpokenDuration: what a screen reader says ("studying for 1 h 23 min")', () => {
+    expect(formatSpokenDuration(30)).toBe('less than 1 min');
+    expect(formatSpokenDuration(12 * 60)).toBe('12 min');
+    expect(formatSpokenDuration(83 * 60)).toBe('1 h 23 min');
+    expect(formatSpokenDuration(60 * 60)).toBe('1 h');
+  });
+  it('formatTimeOfDay: "9:14" · "21:05" (local, 24 h)', () => {
+    expect(formatTimeOfDay(new Date(2026, 9, 5, 9, 14).getTime())).toBe('9:14');
+    expect(formatTimeOfDay(new Date(2026, 9, 5, 21, 5).getTime())).toBe('21:05');
+    expect(formatTimeOfDay(new Date(2026, 9, 5, 0, 0).getTime())).toBe('0:00');
   });
 });

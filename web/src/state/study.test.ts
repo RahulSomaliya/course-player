@@ -1,13 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { JourneySession, ProgressSnapshot } from '../../../shared/types';
+import type { JourneySession, ProgressSnapshot, ProgressState } from '../../../shared/types';
 import { indexCourse } from '../lib/course';
-import { localDateKey } from '../lib/dates';
-import { PENDING_MAX_AGE_MS, SESSION_IDLE_MS, type LiveSession, type SignOffAnswer } from '../lib/session';
 import { withLast } from '../lib/progress';
+import type { SignOffAnswer } from '../lib/session';
 import type { KeyValueStore } from '../lib/storage';
 import { sampleCourse } from '../lib/test-fixtures';
 import { ProgressStore } from './progress';
-import { StudyController, legacyWrapKey, pendingKey, sessionKey } from './study';
+import { StudyController, studyKey } from './study';
 
 function memoryStore(init: Record<string, string> = {}): KeyValueStore & { data: Map<string, string> } {
   const data = new Map(Object.entries(init));
@@ -28,20 +27,20 @@ const SNAP: ProgressSnapshot = {
   current: { sectionNumber: 3, lectureNumber: 1, title: 'Props' },
   days: {},
 };
-const noAnswer: SignOffAnswer = { mood: null, note: null, stuck: false };
+const MIN = 60_000;
+const answer = (over: Partial<SignOffAnswer> = {}): SignOffAnswer => ({ minutes: 0, mood: null, note: null, stuck: false, ...over });
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
 type Opts = {
-  connected?: boolean;
   storage?: KeyValueStore & { data: Map<string, string> };
   send?: (s: JourneySession) => Promise<unknown>;
   start?: Date;
-  snapshot?: ProgressSnapshot;
+  snapshot?: (state?: ProgressState) => ProgressSnapshot;
 };
 
 function setup(opts: Opts = {}) {
   const storage = opts.storage ?? memoryStore();
-  let epoch = (opts.start ?? new Date(2026, 9, 1, 19, 0)).getTime();
+  let epoch = (opts.start ?? new Date(2026, 9, 5, 19, 0)).getTime();
   let perf = 0;
   let n = 0;
   const progress = new ProgressStore({
@@ -54,25 +53,26 @@ function setup(opts: Opts = {}) {
   const sent: JourneySession[] = [];
   const study = new StudyController({
     courseId: course.id,
+    legacyCourseId: 'test-folder',
     profile: 'mansi',
     progress,
     index: indexCourse(course),
     storage,
-    isConnected: () => opts.connected ?? true,
     send: opts.send ?? (async (s) => void sent.push(s)),
-    snapshot: () => opts.snapshot ?? SNAP,
+    snapshot: opts.snapshot ?? ((state) => ({ ...SNAP, days: state?.days ?? {} })),
     clock: { now: () => epoch, perf: () => perf },
     isVisible: () => true,
-    newId: () => `session-${++n}`,
+    newId: () => `id-${++n}`,
   });
-  const advance = (seconds: number, tick = true): void => {
+  /** wall-clock time passing with the app open (the 1 s ticker runs) */
+  const advance = (seconds: number): void => {
     for (let i = 0; i < seconds; i++) {
       epoch += 1000;
       perf += 1000;
-      if (tick) study.tick();
+      study.tick();
     }
   };
-  /** jump the wall clock without ticking (laptop asleep / app closed) */
+  /** wall-clock time passing with the app closed / laptop asleep (no ticks) */
   const jump = (ms: number): void => {
     epoch += ms;
     perf += ms;
@@ -82,391 +82,280 @@ function setup(opts: Opts = {}) {
     advance(seconds);
     study.setActivity({ playing: false });
   };
-  /** App.tsx's open order: resume, the SSD copy is read (hydrate), then the 24 h rule */
-  const open = async (): Promise<void> => {
-    study.resume();
-    await progress.hydrate();
-    study.autoClose();
-  };
-  return { study, progress, storage, sent, advance, jump, play, open, epoch: () => epoch };
+  return { study, progress, storage, sent, advance, jump, play, now: () => epoch };
 }
 
-const stale = (over: Partial<LiveSession> = {}): LiveSession => ({
-  id: 'old',
-  startedAt: new Date(2026, 8, 29, 20, 0).getTime(), // Tue evening
-  lastStudyAt: new Date(2026, 8, 29, 21, 12).getTime(),
-  seconds: 72 * 60,
-  sectionSeconds: { 3: 72 * 60 },
-  lecturesCompleted: [],
-  finishedSections: [],
-  ...over,
-});
-
-describe('StudyController: study time', () => {
-  it('a playing video adds study time to today and starts a session in its section', () => {
-    const { study, progress, advance, epoch } = setup();
-    study.setActivity({ lectureId: id(5), playing: true, reading: false });
-    advance(90);
-    expect(progress.get().days[localDateKey(new Date(epoch()))]).toBe(90);
-    expect(study.getState().live).toMatchObject({ seconds: 90, sectionSeconds: { 3: 90 } });
+describe('StudyController: the wall-clock study timer (spec v3 A3)', () => {
+  it('Start studying starts one session, persisted under the NEW key; a second Start changes nothing', () => {
+    const { study, storage, now } = setup();
+    study.startSession();
+    const s = study.getState().session;
+    expect(s).toMatchObject({ id: 'id-1', startedAt: now(), autoStarted: false });
+    expect(JSON.parse(storage.data.get(studyKey(course.id, 'mansi')) ?? 'null')).toMatchObject({ id: 'id-1' });
+    expect(storage.data.has(`cp:${course.id}:mansi:session`)).toBe(false); // never v2's key
+    study.startSession();
+    expect(study.getState().session).toBe(s);
   });
 
-  it('nothing open → no study time, no session', () => {
-    const { study, progress, advance } = setup();
-    advance(30);
-    expect(progress.get().days).toEqual({});
-    expect(study.getState().live).toBeNull();
-  });
-
-  it('an article counts only while there was input in the last 3 min', () => {
-    const { study, progress, advance, epoch } = setup();
-    study.setActivity({ lectureId: id(4), playing: false, reading: true });
-    study.noteInput();
-    advance(200);
-    expect(progress.get().days[localDateKey(new Date(epoch()))]).toBe(180);
-  });
-
-  it('persists the live session so a reload continues it', () => {
+  it('nothing pauses it: no lecture open, no input, the app closed for hours — it keeps running', () => {
     const storage = memoryStore();
-    setup({ storage }).play(0, 60);
-    const b = setup({ storage });
+    const a = setup({ storage });
+    a.study.startSession();
+    a.advance(600); // 10 min with nothing open
+    const b = setup({ storage, start: new Date(a.now() + 3 * 3_600_000) }); // app reopened 3 h later
     b.study.resume();
-    expect(b.study.getState().live?.seconds).toBe(60);
-    expect(b.study.getState().pending).toEqual([]);
+    expect(b.study.getState().session).toMatchObject({ id: 'id-1', startedAt: new Date(2026, 9, 5, 19, 0).getTime() });
+  });
+
+  it('auto-start: playing / opening a lecture with no session starts one (autoStarted) and raises the quiet notice', () => {
+    const { study, now } = setup();
+    study.autoStart();
+    expect(study.getState()).toMatchObject({ session: { autoStarted: true }, notice: { at: now() } });
+  });
+
+  it('auto-start while a session runs changes nothing (no second notice)', () => {
+    const { study, jump } = setup();
+    study.startSession();
+    const before = study.getState();
+    jump(MIN);
+    study.autoStart();
+    expect(study.getState()).toBe(before);
+    expect(before.notice).toBeNull();
+  });
+
+  it('the player records WHERE she studied — and no longer writes study days (only a sign-off does)', async () => {
+    const { study, progress, play } = setup();
+    study.startSession();
+    play(5, 90); // §03
+    play(0, 30); // §01
+    expect(progress.get().days).toEqual({});
+    const r = await study.signOff(answer({ minutes: 2 }));
+    expect(r.ok && r.update.sectionNumber).toBe(3);
+  });
+
+  it('no session → the ticker records nothing at all', () => {
+    const { study, progress, play } = setup();
+    play(5, 120);
+    expect(study.getState().session).toBeNull();
+    expect(progress.get().days).toEqual({});
   });
 
   it('records lectures completed and sections finished during the session', () => {
-    const { study, advance } = setup();
-    study.setActivity({ lectureId: id(0), playing: true, reading: false });
-    advance(10);
+    const { study } = setup();
+    study.startSession();
     study.setDone(id(0), true);
     study.setDone(id(1), true);
     study.setDone(id(2), true);
-    expect(study.getState().live?.lecturesCompleted.map((l) => l.lecture)).toEqual([1, 2, 3]);
-    expect(study.getState().live?.finishedSections).toEqual([1]);
+    expect(study.getState().session?.lecturesCompleted.map((l) => l.lecture)).toEqual([1, 2, 3]);
+    expect(study.getState().session?.finishedSections).toEqual([1]);
     study.setDone(id(2), false);
-    expect(study.getState().live?.lecturesCompleted.map((l) => l.lecture)).toEqual([1, 2]);
+    expect(study.getState().session?.lecturesCompleted.map((l) => l.lecture)).toEqual([1, 2]);
   });
 
-  it('marking done with no session running only changes progress', () => {
+  it('marking done with no session only changes progress', () => {
     const { study, progress } = setup();
     study.setDone(id(0), true);
     expect(progress.get().lectures[id(0)]?.done).toBe(true);
-    expect(study.getState().live).toBeNull();
+    expect(study.getState().session).toBeNull();
+  });
+
+  it('a stored v3 session of the wrong shape is not trusted (reported, then ignored)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const storage = memoryStore({ [studyKey(course.id, 'mansi')]: JSON.stringify({ id: 'x' }) });
+    const { study } = setup({ storage });
+    study.resume();
+    expect(study.getState().session).toBeNull();
+    warn.mockRestore();
   });
 });
 
-describe('StudyController: idle no longer sends anything (v2)', () => {
-  it('20 min without studying: nothing is sent, the session stops growing and waits (header dot)', () => {
-    const { study, sent, advance, play } = setup();
-    play(5, 6 * 60);
-    expect(study.getState().waiting).toBe(false);
-    advance(SESSION_IDLE_MS / 1000 + 2);
-    expect(sent).toHaveLength(0);
-    expect(study.getState()).toMatchObject({ waiting: true, live: { seconds: 6 * 60 } });
-  });
-
-  it('studying again the same day continues the same session', () => {
-    const { study, advance, play } = setup();
-    play(5, 6 * 60);
-    advance(SESSION_IDLE_MS / 1000 + 60);
-    play(5, 60);
-    expect(study.getState()).toMatchObject({ waiting: false, pending: [], live: { id: 'session-1', seconds: 7 * 60 } });
-  });
-
-  it('studying again on another day: the earlier session waits for its note, a new one starts', () => {
-    const { study, jump, advance, play } = setup();
-    play(5, 30 * 60);
-    jump(14 * 3_600_000); // next morning, app left open
-    advance(1); // the first tick after a sleep is capped at 5 s (lib/ticker.ts); nothing plays here
-    play(5, 60);
-    const { live, pending } = study.getState();
-    expect(pending.map((s) => [s.id, s.seconds])).toEqual([['session-1', 1800]]);
-    expect(live).toMatchObject({ id: 'session-2', seconds: 60 });
-  });
-});
-
-describe('StudyController: the next app open', () => {
-  it('a stored session idle > 20 min becomes a pending one (the card asks for its note)', () => {
-    const storage = memoryStore({ [sessionKey(course.id, 'mansi')]: JSON.stringify(stale()) });
-    const { study, sent } = setup({ storage, start: new Date(2026, 8, 30, 9, 0) });
-    study.resume();
-    expect(sent).toHaveLength(0);
-    expect(study.getState()).toMatchObject({ live: null, pending: [{ id: 'old' }] });
-    expect(storage.data.has(sessionKey(course.id, 'mansi'))).toBe(false);
-    expect(JSON.parse(storage.data.get(pendingKey(course.id, 'mansi')) ?? '[]')).toHaveLength(1);
-    expect(study.queue().map((t) => t.kind)).toEqual(['pending']);
-  });
-
-  it('without JS Journey a stale session is simply dropped (it still counts in local stats)', () => {
-    const storage = memoryStore({ [sessionKey(course.id, 'mansi')]: JSON.stringify(stale()) });
-    const { study } = setup({ storage, connected: false, start: new Date(2026, 8, 30, 9, 0) });
-    study.resume();
-    expect(study.getState()).toMatchObject({ live: null, pending: [] });
-  });
-
-  it('an earlier session older than 24 h she has not been asked about yet is NOT sent: the card asks first', async () => {
-    const storage = memoryStore({ [sessionKey(course.id, 'mansi')]: JSON.stringify(stale()) });
-    const { study, sent, open } = setup({ storage, start: new Date(stale().lastStudyAt + 2 * PENDING_MAX_AGE_MS) });
-    await open();
-    await settle();
-    expect(sent).toHaveLength(0);
-    expect(study.getState().pending.map((p) => p.id)).toEqual(['old']);
-  });
-
-  it('closing the card on an earlier session older than 24 h ("she still skips") sends it: autoClosed true', async () => {
-    const storage = memoryStore({ [pendingKey(course.id, 'mansi')]: JSON.stringify([stale()]) });
-    const { study, sent, open } = setup({ storage, start: new Date(stale().lastStudyAt + PENDING_MAX_AGE_MS + 60_000) });
-    await open();
-    study.skip(study.queue()[0]!);
-    await settle();
+describe('StudyController: Send to Rahul', () => {
+  it('one update: her minutes, startedAt → the moment she pressed Send; the timer stops at once', async () => {
+    const { study, sent, jump, now } = setup();
+    study.startSession();
+    const startedAt = now();
+    jump(83 * MIN + 20_000);
+    const r = await study.signOff(answer({ minutes: 60, mood: '😄', note: 'props clicked', stuck: true }));
+    expect(r.ok).toBe(true);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ id: 'old', minutes: 72, autoClosed: true, mood: null, note: null, stuck: false, progress: SNAP });
-    expect(study.getState().pending).toEqual([]);
+    expect(sent[0]).toMatchObject({
+      id: 'id-1',
+      startedAt: new Date(startedAt).toISOString(),
+      endedAt: new Date(now()).toISOString(),
+      minutes: 60,
+      mood: '😄',
+      note: 'props clicked',
+      stuck: true,
+      autoClosed: false,
+      sectionNumber: 3, // no player time → her current section
+    });
+    expect(study.getState().session).toBeNull();
   });
 
-  it('a skipped session younger than 24 h waits (dot) and is sent once it crosses 24 h — on open or while open', async () => {
-    const storage = memoryStore({ [pendingKey(course.id, 'mansi')]: JSON.stringify([stale()]) });
-    const { study, sent, jump, advance, open } = setup({ storage, start: new Date(stale().lastStudyAt + 3_600_000) });
-    await open();
-    study.skip(study.queue()[0]!);
-    await settle();
-    expect(sent).toHaveLength(0);
-    expect(study.getState().pending[0]?.skippedAt).not.toBeNull();
-    jump(PENDING_MAX_AGE_MS);
-    advance(61); // the rule is checked about once a minute
-    await settle();
-    expect(sent.map((s) => [s.id, s.autoClosed])).toEqual([['old', true]]);
+  it('never more than the timer (the card caps it; this is the last guard)', async () => {
+    const { study, sent, jump } = setup();
+    study.startSession();
+    jump(10 * MIN);
+    await study.signOff(answer({ minutes: 90 }));
+    expect(sent[0]?.minutes).toBe(10);
   });
 
-  it('skipping the CURRENT session changes nothing (it keeps growing; Quit/Sign off ask again)', async () => {
-    const { study, sent, play } = setup();
-    play(5, 600);
-    study.skip(study.queue()[0]!);
-    await settle();
-    expect(sent).toHaveLength(0);
-    expect(study.getState().live?.seconds).toBe(600);
-  });
-
-  it('the 24 h rule drops a skipped session under 5 min instead of sending it', async () => {
-    const storage = memoryStore({ [pendingKey(course.id, 'mansi')]: JSON.stringify([{ ...stale({ seconds: 120 }), skippedAt: stale().lastStudyAt }]) });
-    const { study, sent, open } = setup({ storage, start: new Date(stale().lastStudyAt + PENDING_MAX_AGE_MS + 60_000) });
-    await open();
-    await settle();
-    expect(sent).toHaveLength(0);
-    expect(study.getState().pending).toEqual([]);
-  });
-
-  // Review 2026-10-01 (high): the auto-close POST started inside resume() while the session stayed in
-  // `pending`, so the at-open card asked about it too — her note then went nowhere ('skipped'), or the
-  // same id went out twice and JS Journey deduped her note away.
-  it('the second open after a skip: a session over 24 h is sent for her at open and never asked about again', async () => {
-    const skipped = { ...stale(), skippedAt: new Date(2026, 8, 30, 9, 0).getTime() }; // Tue's session, card closed Wed
-    const storage = memoryStore({ [pendingKey(course.id, 'mansi')]: JSON.stringify([skipped]) });
-    let release: () => void = () => undefined;
-    const sent: JourneySession[] = [];
-    const send = (s: JourneySession): Promise<void> => {
-      sent.push(s);
-      return new Promise<void>((r) => {
-        release = r;
-      });
-    };
-    const { study, open } = setup({ storage, send, start: new Date(2026, 9, 1, 19, 0) }); // Thu evening
-    await open();
-    // in flight: not on the card, not in the header dot, not a reason for Quit to ask …
-    expect(sent.map((s) => [s.id, s.autoClosed, s.note])).toEqual([['old', true, null]]);
-    expect(study.queue()).toEqual([{ kind: 'note' }]);
-    expect(study.getState().pending).toEqual([]);
-    expect(study.hasUnsigned()).toBe(false);
-    // … but still stored, so closing the tab before the POST lands loses nothing (re-sent: JS Journey dedups)
-    expect(JSON.parse(storage.data.get(pendingKey(course.id, 'mansi')) ?? '[]')).toMatchObject([{ id: 'old' }]);
-    release();
-    await settle();
-    expect(storage.data.has(pendingKey(course.id, 'mansi'))).toBe(false);
-    study.autoClose();
-    await settle();
-    expect(sent).toHaveLength(1);
-  });
-
-  it('an auto-close the course server did not take goes back to pending and is tried again', async () => {
-    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const skipped = { ...stale(), skippedAt: stale().lastStudyAt };
-    const storage = memoryStore({ [pendingKey(course.id, 'mansi')]: JSON.stringify([skipped]) });
-    let down = true;
-    const sent: JourneySession[] = [];
-    const send = async (s: JourneySession): Promise<void> => {
-      if (down) throw new Error('server down');
-      sent.push(s);
-    };
-    const { study, open } = setup({ storage, send, start: new Date(stale().lastStudyAt + PENDING_MAX_AGE_MS + 60_000) });
-    await open();
-    await settle();
-    expect(study.getState().pending.map((p) => p.id)).toEqual(['old']);
-    down = false;
-    study.autoClose();
-    await settle();
-    expect(sent.map((s) => s.id)).toEqual(['old']);
-    expect(study.getState().pending).toEqual([]);
-    err.mockRestore();
-  });
-
-  // Review 2026-10-01: resume() runs before hydrate settles, and the update's snapshot (takenAt = now,
-  // so JS Journey keeps it as newest) was built from this browser's copy — empty on a cleared browser.
-  it('the 24 h rule waits for hydrate: its update carries the SSD copy of her progress', async () => {
-    const skipped = { ...stale(), skippedAt: stale().lastStudyAt };
-    const storage = memoryStore({ [pendingKey(course.id, 'mansi')]: JSON.stringify([skipped]) });
-    const { study, progress, sent } = setup({ storage, start: new Date(stale().lastStudyAt + PENDING_MAX_AGE_MS + 60_000) });
-    study.resume();
-    study.autoClose();
-    await settle();
-    expect(sent).toHaveLength(0);
+  it('credits the minutes she SENT to the days the session spanned — and the update carries them', async () => {
+    const { study, progress, sent, jump } = setup({ start: new Date(2026, 9, 5, 23, 0) });
     await progress.hydrate();
-    study.autoClose();
-    await settle();
-    expect(sent.map((s) => s.id)).toEqual(['old']);
+    study.startSession();
+    jump(3 * 60 * MIN); // 23:00 → 02:00: 1 h before midnight, 2 h after
+    await study.signOff(answer({ minutes: 60 }));
+    expect(progress.get().days).toEqual({ '2026-10-05': 1200, '2026-10-06': 2400 });
+    expect(sent[0]?.progress?.days).toEqual({ '2026-10-05': 1200, '2026-10-06': 2400 });
   });
 
-  it('a session on the open card is left alone by the 24 h rule; closing the card on it (skip) lets it go', async () => {
-    const skipped = { ...stale(), skippedAt: stale().lastStudyAt };
-    const storage = memoryStore({ [pendingKey(course.id, 'mansi')]: JSON.stringify([skipped]) });
-    const { study, sent, jump, advance, open } = setup({ storage, start: new Date(stale().lastStudyAt + PENDING_MAX_AGE_MS - 30_000) });
-    await open();
-    const [target] = study.queue();
-    const release = study.hold([target!]);
-    jump(60_000); // crosses 24 h while the card asks
-    advance(61);
-    await settle();
-    expect(sent).toHaveLength(0);
-    study.skip(target!);
-    await settle();
-    expect(sent.map((s) => [s.id, s.autoClosed])).toEqual([['old', true]]);
-    release();
-  });
-
-  it('her answer on the open card wins over the 24 h rule', async () => {
-    const skipped = { ...stale(), skippedAt: stale().lastStudyAt };
-    const storage = memoryStore({ [pendingKey(course.id, 'mansi')]: JSON.stringify([skipped]) });
-    const { study, sent, jump, advance, open } = setup({ storage, start: new Date(stale().lastStudyAt + PENDING_MAX_AGE_MS - 30_000) });
-    await open();
-    const [target] = study.queue();
-    const release = study.hold([target!]);
-    jump(60_000);
-    advance(61);
-    await expect(study.signOff(target!, { mood: '🙂', note: 'useEffect cleanup confused me', stuck: false })).resolves.toBe('sent');
-    release();
-    expect(sent.map((s) => [s.id, s.autoClosed, s.note])).toEqual([['old', false, 'useEffect cleanup confused me']]);
-  });
-
-  it('signing off a session that already went to Rahul says so (gone), it is not a silent skip', async () => {
-    const skipped = { ...stale(), skippedAt: stale().lastStudyAt };
-    const storage = memoryStore({ [pendingKey(course.id, 'mansi')]: JSON.stringify([skipped]) });
-    const { study, open } = setup({ storage, start: new Date(stale().lastStudyAt + PENDING_MAX_AGE_MS + 60_000) });
-    await open();
-    await settle();
-    await expect(study.signOff({ kind: 'pending', session: skipped }, { mood: null, note: 'late note', stuck: false })).resolves.toBe('gone');
-  });
-
-  it('a v1 wrap-up left unanswered becomes a pending session (no data lost in the upgrade)', () => {
-    const storage = memoryStore({ [legacyWrapKey(course.id, 'mansi')]: JSON.stringify({ session: stale(), endedAt: stale().lastStudyAt }) });
-    const { study } = setup({ storage, start: new Date(2026, 8, 30, 9, 0) });
-    study.resume();
-    expect(study.getState().pending.map((s) => s.id)).toEqual(['old']);
-    expect(storage.data.has(legacyWrapKey(course.id, 'mansi'))).toBe(false);
-  });
-});
-
-describe('StudyController: signing off', () => {
-  it('the queue: earlier sessions first (oldest first), then this one; a note-only target when nothing is unsigned', () => {
-    const storage = memoryStore({ [pendingKey(course.id, 'mansi')]: JSON.stringify([stale()]) });
-    const { study, play } = setup({ storage, start: new Date(2026, 8, 30, 9, 0) });
-    study.resume();
-    play(5, 60);
-    expect(study.queue().map((t) => t.kind)).toEqual(['pending', 'live']);
-    expect(setup().study.queue()).toEqual([{ kind: 'note' }]);
-  });
-
-  it('Send: one update with her note, mood, stuck flag and progress; the session resets to 0', async () => {
-    const { study, sent, play } = setup();
-    play(5, 10 * 60);
-    const [target] = study.queue();
-    await expect(study.signOff(target!, { mood: '😄', note: 'nice', stuck: true })).resolves.toBe('sent');
-    expect(sent[0]).toMatchObject({ id: 'session-1', minutes: 10, mood: '😄', note: 'nice', stuck: true, autoClosed: false, progress: SNAP });
-    expect(study.getState().live).toBeNull();
-    expect(study.queue()).toEqual([{ kind: 'note' }]);
-  });
-
-  it('signs off what she studied up to Send, though the card opened earlier', async () => {
-    const { study, sent, play } = setup();
-    play(5, 6 * 60);
-    const [target] = study.queue();
-    play(5, 60); // the video kept playing behind the card
-    await study.signOff(target!, noAnswer);
-    expect(sent[0]?.minutes).toBe(7);
-  });
-
-  it('"Send without a note" on an earlier session: autoClosed false', async () => {
-    const storage = memoryStore({ [pendingKey(course.id, 'mansi')]: JSON.stringify([stale()]) });
-    const { study, sent } = setup({ storage, start: new Date(2026, 8, 30, 9, 0) });
-    study.resume();
-    await study.signOff(study.queue()[0]!, noAnswer);
-    expect(sent[0]).toMatchObject({ id: 'old', autoClosed: false, note: null });
-    expect(study.getState().pending).toEqual([]);
-  });
-
-  it('a note-only update (nothing studied in the player): minutes 0, her current section', async () => {
+  it('nothing to send (0 min, no note): refused with the reason, nothing posted, the timer keeps running', async () => {
     const { study, sent } = setup();
-    await expect(study.signOff({ kind: 'note' }, { mood: null, note: 'Read the docs on my phone', stuck: false })).resolves.toBe('sent');
-    expect(sent[0]).toMatchObject({ minutes: 0, sectionNumber: 3, note: 'Read the docs on my phone' });
-  });
-
-  // Review 2026-10-01: with every lecture done there is no current section, and section 0 got JS
-  // Journey's 400 — which the outbox drops for good, note and all.
-  it('a note-only update after she finished every lecture: the section of her last lecture, else the last section', async () => {
-    const answer: SignOffAnswer = { mood: null, note: 'Rebuilding the projects from scratch', stuck: false };
-    const a = setup({ snapshot: { ...SNAP, current: null } });
-    await a.progress.hydrate();
-    a.progress.update((s, t) => withLast(s, id(0), t));
-    await a.study.signOff({ kind: 'note' }, answer);
-    expect(a.sent[0]?.sectionNumber).toBe(1);
-    const b = setup({ snapshot: { ...SNAP, current: null } });
-    await b.study.signOff({ kind: 'note' }, answer);
-    expect(b.sent[0]?.sectionNumber).toBe(3);
-  });
-
-  it('under 5 min with no note: nothing is sent, the session still resets', async () => {
-    const { study, sent, play } = setup();
-    play(5, 4 * 60);
-    await expect(study.signOff(study.queue()[0]!, noAnswer)).resolves.toBe('skipped');
+    study.startSession();
+    const r = await study.signOff(answer({ mood: '🙂' }));
+    expect(r).toEqual({ ok: false, error: 'Add the time you studied, or a note.' });
     expect(sent).toHaveLength(0);
-    expect(study.getState().live).toBeNull();
+    expect(study.getState().session).not.toBeNull();
   });
 
-  it('a send that fails (course server gone) keeps the session for another try', async () => {
+  it('the course server did not take it: the timer keeps running, no study time is credited, it says why', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const { study, play } = setup({ send: async () => Promise.reject(new Error('server down')) });
-    play(5, 10 * 60);
-    await expect(study.signOff(study.queue()[0]!, noAnswer)).resolves.toBe('failed');
-    expect(study.getState().live?.seconds).toBe(600);
+    const { study, progress, jump } = setup({ send: async () => Promise.reject(new Error('server down')) });
+    await progress.hydrate();
+    study.startSession();
+    jump(30 * MIN);
+    const r = await study.signOff(answer({ minutes: 30 }));
+    expect(r).toEqual({ ok: false, error: 'Couldn’t hand it to the course app — is it still running? Try again.' });
+    expect(study.getState().session).not.toBeNull();
+    expect(progress.get().days).toEqual({});
     expect(err).toHaveBeenCalled();
     err.mockRestore();
   });
 
-  it('without JS Journey, signing off just resets (nothing can reach Rahul)', async () => {
-    const { study, sent, play } = setup({ connected: false });
-    play(5, 10 * 60);
-    await expect(study.signOff(study.queue()[0]!, { mood: null, note: 'x', stuck: false })).resolves.toBe('skipped');
-    expect(sent).toHaveLength(0);
-    expect(study.getState().live).toBeNull();
+  // 2026-10-05: v2 returned 'skipped' when JS Journey was not connected and forgot the session.
+  it('JS Journey not connected is not a reason to drop it: it is handed to the outbox like any other', async () => {
+    const { study, sent, jump } = setup();
+    study.startSession();
+    jump(20 * MIN);
+    await study.signOff(answer({ minutes: 20 }));
+    expect(sent.map((s) => s.minutes)).toEqual([20]);
   });
 
-  it('Quit asks for a sign-off when anything is unsigned (≥ 1 min, or an earlier session) and JS Journey is connected', () => {
-    const a = setup();
-    a.play(5, 30);
-    expect(a.study.hasUnsigned()).toBe(false);
-    a.play(5, 60);
-    expect(a.study.hasUnsigned()).toBe(true);
-    const b = setup({ connected: false });
-    b.play(5, 600);
-    expect(b.study.hasUnsigned()).toBe(false);
+  it('Note to Rahul…: a note-only update (0 min, its own id) — a running timer is left alone', async () => {
+    const { study, sent, progress, jump } = setup();
+    await progress.hydrate();
+    study.startSession();
+    jump(15 * MIN);
+    const r = await study.sendNote(answer({ minutes: 15, note: 'Read the docs on my phone' }));
+    expect(r.ok).toBe(true);
+    expect(sent[0]).toMatchObject({ id: 'id-2', minutes: 0, sectionNumber: 3, note: 'Read the docs on my phone' });
+    expect(study.getState().session?.id).toBe('id-1');
+    expect(progress.get().days).toEqual({});
+    await expect(study.sendNote(answer({ note: '  ' }))).resolves.toEqual({ ok: false, error: 'Write a note for Rahul.' });
+  });
+
+  // Review 2026-10-01: with every lecture done there is no current section, and section 0 got JS
+  // Journey's 400.
+  it('no player time and no current lecture: the section of her last lecture, else the last section', async () => {
+    const a = setup({ snapshot: () => ({ ...SNAP, current: null }) });
+    await a.progress.hydrate();
+    a.progress.update((s, t) => withLast(s, id(0), t));
+    await a.study.sendNote(answer({ note: 'Rebuilding the projects' }));
+    expect(a.sent[0]?.sectionNumber).toBe(1);
+    const b = setup({ snapshot: () => ({ ...SNAP, current: null }) });
+    await b.study.sendNote(answer({ note: 'Rebuilding the projects' }));
+    expect(b.sent[0]?.sectionNumber).toBe(3);
+  });
+
+  it('Try again after JS Journey refused it: the same update (same id) with her edits — no study time twice', async () => {
+    const { study, progress, sent, jump } = setup();
+    await progress.hydrate();
+    study.startSession();
+    jump(40 * MIN);
+    const first = await study.signOff(answer({ minutes: 40, note: 'first try' }));
+    if (!first.ok) throw new Error('expected the hand-over to work');
+    const daysAfterFirst = progress.get().days;
+    await study.resend({ ...first.update, note: 'second try' });
+    expect(sent.map((s) => [s.id, s.note])).toEqual([
+      ['id-1', 'first try'],
+      ['id-1', 'second try'],
+    ]);
+    expect(progress.get().days).toBe(daysAfterFirst);
+  });
+
+  it('Discard: the session is gone — nothing sent, no study time credited', async () => {
+    const { study, sent, progress, storage, jump } = setup();
+    await progress.hydrate();
+    study.startSession();
+    jump(3 * MIN);
+    study.discard();
+    expect(study.getState().session).toBeNull();
+    expect(storage.data.has(studyKey(course.id, 'mansi'))).toBe(false);
+    expect(sent).toHaveLength(0);
+    expect(progress.get().days).toEqual({});
+  });
+});
+
+describe('StudyController: v2 state left in this browser (spec v3 A3 "Legacy v2 state")', () => {
+  const tue = new Date(2026, 8, 29, 20, 0).getTime();
+  const v2 = (sid: string, seconds: number) => ({
+    id: sid,
+    startedAt: tue,
+    lastStudyAt: tue + seconds * 1000,
+    seconds,
+    sectionSeconds: { 3: seconds },
+    lecturesCompleted: [],
+    finishedSections: [],
+  });
+
+  it('each v2 session ≥ 1 min is sent once as recorded (autoClosed, no note) — under either course id — then the keys go', async () => {
+    const storage = memoryStore({
+      [`cp:${course.id}:mansi:session`]: JSON.stringify(v2('live', 42 * 60)),
+      'cp:test-folder:mansi:pending': JSON.stringify([{ ...v2('tue', 72 * 60), skippedAt: tue }]),
+      'cp:test-folder:mansi:wrap': JSON.stringify({ session: v2('blip', 20), endedAt: tue }),
+    });
+    const { study, sent, progress } = setup({ storage });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await study.migrateLegacy();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('blip')); // the 20 s one: said, not silently dropped
+    warn.mockRestore();
+    expect(sent.map((s) => [s.id, s.minutes, s.autoClosed, s.note])).toEqual([
+      ['live', 42, true, null],
+      ['tue', 72, true, null],
+    ]);
+    expect([...storage.data.keys()].filter((k) => /:(session|pending|wrap)$/.test(k))).toEqual([]);
+    expect(progress.get().days).toEqual({}); // v2 already counted it in days
+    expect(study.getState().session).toBeNull(); // a v2 session never becomes a running v3 timer
+  });
+
+  it('the course server did not take them: the keys stay, so the next open sends them again', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const key = `cp:${course.id}:mansi:pending`;
+    const storage = memoryStore({ [key]: JSON.stringify([v2('tue', 72 * 60)]) });
+    const { study } = setup({ storage, send: async () => Promise.reject(new Error('server down')) });
+    await study.migrateLegacy();
+    expect(storage.data.has(key)).toBe(true);
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  // Review 2026-10-01: an update's snapshot (takenAt = now, so JS Journey keeps it as the newest) built
+  // from a cleared browser's empty copy overwrote the coach's numbers. It must come from the SSD copy.
+  it('waits for the SSD progress copy before building the updates', async () => {
+    const storage = memoryStore({ [`cp:${course.id}:mansi:session`]: JSON.stringify(v2('live', 42 * 60)) });
+    const { study, progress, sent } = setup({ storage });
+    const hydrate = vi.spyOn(progress, 'hydrate');
+    await study.migrateLegacy();
+    expect(hydrate).toHaveBeenCalled();
+    expect(progress.isHydrated()).toBe(true);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('nothing left from v2 → nothing sent', async () => {
+    const { study, sent } = setup();
+    await study.migrateLegacy();
+    await settle();
+    expect(sent).toEqual([]);
   });
 });

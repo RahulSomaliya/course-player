@@ -8,7 +8,7 @@ import {
   withLast,
   withPos,
   withPrefs,
-  withStudy,
+  withStudyDays,
 } from './progress';
 
 describe('pickNewer (LWW between localStorage and the SSD copy)', () => {
@@ -59,10 +59,12 @@ describe('mutations stamp updatedAt and never mutate', () => {
     const s = withDone(withPos(s0, 'a.mp4', 40, 1), 'a.mp4', true, 2);
     expect(s.lectures['a.mp4']?.pos).toBe(40);
   });
-  it('withStudy adds to the day', () => {
-    let s = withStudy(s0, '2026-10-01', 3, 1);
-    s = withStudy(s, '2026-10-01', 2, 2);
-    expect(s.days).toEqual({ '2026-10-01': 5 });
+  it('withStudyDays adds a sign-off\'s credit to each day it spans (lib/session.ts splitAcrossDays)', () => {
+    let s = withStudyDays(s0, { '2026-10-01': 3 }, 1);
+    s = withStudyDays(s, { '2026-10-01': 2, '2026-10-02': 7 }, 2);
+    expect(s.days).toEqual({ '2026-10-01': 5, '2026-10-02': 7 });
+    expect(s.updatedAt).toBe(2);
+    expect(withStudyDays(s, {}, 3)).toBe(s);
   });
   it('withLast and withPrefs', () => {
     expect(withLast(s0, 'b.mp4', 7).lastLectureId).toBe('b.mp4');

@@ -70,11 +70,13 @@ function Watch({ lecture, section }: { lecture: Lecture; section: Section }) {
   }, []);
 
   // Opening a lecture: remember it for Continue, tell the study ticker what is open, start at the top.
-  // This mount effect runs BEFORE ProfileApp's (parent) effect, so it must never run before the SSD copy
-  // is read — App.tsx renders no screen until store.hydrate() settles (see the note there).
+  // An article / pdf lecture starts the study timer if none runs (spec v3: auto-start; a video starts it
+  // when it plays — onPlayingChange). This mount effect runs BEFORE ProfileApp's (parent) effect, so it
+  // must never run before the SSD copy is read — App.tsx renders no screen until store.hydrate() settles.
   useEffect(() => {
     store.update((s, now) => withLast(s, lecture.id, now));
     study.setActivity({ lectureId: lecture.id, playing: false, reading: !isVideo });
+    if (!isVideo) study.autoStart();
     window.scrollTo(0, 0);
     return () => study.setActivity({ lectureId: null, playing: false, reading: false });
   }, [lecture.id, isVideo, store, study]);
@@ -134,7 +136,16 @@ function Watch({ lecture, section }: { lecture: Lecture; section: Section }) {
   const onComplete = useCallback(() => {
     if (!store.get().lectures[lecture.id]?.done) study.setDone(lecture.id, true);
   }, [store, study, lecture.id]);
-  const onPlayingChange = useCallback((playing: boolean) => study.setActivity({ playing }), [study]);
+  // The `play` event (Player onPlay — not `playing`, which also fires after a buffering stall): a video she
+  // plays with no session running starts the timer. Right after Send a video still playing does NOT
+  // restart it — only her next play does.
+  const onPlayingChange = useCallback(
+    (playing: boolean) => {
+      study.setActivity({ playing });
+      if (playing) study.autoStart();
+    },
+    [study],
+  );
 
   const overline = `${section.part ? `Part ${section.part.number}` : `Section ${section.id}`} · Lecture ${lecture.number}`;
 

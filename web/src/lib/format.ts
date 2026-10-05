@@ -18,6 +18,27 @@ export function formatDuration(seconds: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
+/** The running study timer: "<1m" · "12m" · "1h 23m" (header chip, sign-off card). */
+export function formatElapsed(seconds: number): string {
+  return seconds < 60 ? '<1m' : formatDuration(seconds);
+}
+
+/** formatElapsed for a screen reader: "less than 1 min" · "12 min" · "1 h 23 min". */
+export function formatSpokenDuration(seconds: number): string {
+  const minutes = Math.floor(Math.max(0, seconds) / 60);
+  if (minutes === 0) return 'less than 1 min';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m} min`;
+  return m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+
+/** Local time of day, 24 h: "9:14" · "21:05" (when the timer started). */
+export function formatTimeOfDay(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 /** "Tue 29 Sep" */
 export function formatDay(key: string): string {
   const { day, month } = dayAndMonth(key);

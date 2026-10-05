@@ -17,7 +17,8 @@ Design decisions: `docs/design.md`. First course: `/Volumes/Rahul's SSD/Courses/
 - `scripts/` — build-sea.sh, deploy.sh · `launcher/` — the `.command` template · `vendor/` — official Node binaries (gitignored, SHA-verified)
 
 ## Naming
-- User-facing: "lecture" (not video/lesson), "section", "course content", "study time", "session", "Quit".
+- User-facing: "lecture" (not video/lesson), "section", "course content", "study time", "session", "Quit",
+  "Start studying", "Sign off", "Send to Rahul", "update" (one sign-off), "Note to Rahul…".
 - Code: `lectureId` = path relative to the course root.
 
 ## Architecture map
@@ -29,11 +30,11 @@ Design decisions: `docs/design.md`. First course: `/Volumes/Rahul's SSD/Courses/
 | media streaming + path guard | `server/media.ts` |
 | progress LWW + atomic writes | `server/store.ts` |
 | JS Journey proxy + outbox | `server/journey.ts` (contract: `~/Developer/js-journey/lib/player.ts`) |
-| delivery state of her updates | `GET /api/journey/:p/outbox?wait=` → `OutboxState.updates` (queued / rejected / delivered); "Try again" = `POST …/outbox/retry`; wrappers in `web/src/lib/api.ts` |
+| delivery state of her updates | `GET /api/journey/:p/outbox?wait=` → `OutboxState.updates` (queued / rejected / delivered); "Try again" = `POST …/outbox/retry`; wrappers in `web/src/lib/api.ts`; web: `state/journey.ts` `awaitDelivery` / `retry`, `lib/outbox.ts` |
 | "course not recognised" | `JourneyProblem` — 409 from status + connect; `ApiError.problem` in the web |
-| sign-offs, pending sessions, 24 h rule | `web/src/state/study.ts`, `web/src/screens/SignOffCard.tsx` |
+| study timer (wall clock), Send, Discard, v2 → v3 migration | `web/src/state/study.ts` (+ `lib/session.ts`, `lib/legacy.ts`), `screens/SignOffCard.tsx`, `components/StudyTimer.tsx` (Start studying, chip, notice) |
 | feed, Got it, snapshot push | `web/src/state/journey.ts`, `web/src/lib/feed.ts` |
-| study time / sessions / stats | `web/src/lib/` |
+| study time / stats | `ProgressState.days` written ONLY at sign-off (`lib/session.ts` `splitAcrossDays` → `lib/progress.ts` `withStudyDays`); running timer shown via `state/study.ts` `useStudyDays`; stats in `web/src/lib/stats.ts` |
 | player | `web/src/player/` |
 
 ## Errors & logging
@@ -54,13 +55,19 @@ the JS Journey token. Clients get a status code + short message. Web shows calm 
   settles, and `ProgressStore.update` queues pre-hydrate changes (`web/src/state/progress.ts`).
 - React sets object refs to null BEFORE useEffect cleanups run on unmount: capture `ref.current` when
   the effect runs (the Player's unmount position save never fired, 2026-10-01).
-- The 24 h auto-close runs ONLY from App's hydrate `.then`, before the at-open card reads the queue —
-  never from `resume()`: it ran pre-hydrate (snapshot from an empty browser copy) and the session stayed
-  in `pending` while its POST flew, so the card asked for a note that was then dropped (2026-10-01).
-  `autoClose()` takes sessions out of `pending` synchronously and skips ids the open card `hold()`s.
+- An update's progress snapshot must come from the HYDRATED (SSD) copy: built from a cleared browser's
+  empty copy it is "newest" on JS Journey and wipes the coach's numbers (2026-10-01). `migrateLegacy()`
+  awaits `progress.hydrate()` itself; App renders no screen (so no Send) before hydrate.
+- Study time = the WALL CLOCK from Start studying / auto-start to Send (spec v3): never pause it on idle,
+  hidden tab or no lecture — v2's activity session under-counted her coding and its idle/24 h paths lost
+  a sign-off (2026-10-05). `ProgressState.days` is credited ONLY at sign-off, from the minutes she sends,
+  split over the days it spanned; the ticker (`lib/ticker.ts`) only picks the section — writing days there
+  again double-counts. The timer stops only after the outbox's 202 (`StudyController.signOff`); a failed
+  hand-over keeps the session and credits nothing.
 - A component whose async action can outlive it must not schedule after unmount (the effect cleanup
   only clears timers that exist then) and must fire once-only callbacks once: the sign-off card's late
-  timer reported a 2nd, completed outcome and App quit after "keep studying" (`SignOffCard.tsx`).
+  timer reported a 2nd, completed outcome and App quit after "keep studying" (`SignOffCard.tsx`). The
+  card's outcome carries `quit` itself; App never re-reads its own (stale) card state to decide.
 - Never await JS Journey before a write route's 202, and never hold the outbox FILE lock across a
   request to it — a write queued behind a slow flush is the same slow 202 (`server/journey.ts`
   `locks` vs `flushLocks`). The first feed page waits (bounded) for deliveries in flight instead.

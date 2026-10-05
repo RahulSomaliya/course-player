@@ -71,8 +71,8 @@ export interface Saver {
 }
 
 /**
- * Debounce with a max wait. A plain 2 s debounce never fires while a video plays — the study ticker
- * changes progress every second — so the SSD copy would lag a whole viewing session behind.
+ * Debounce with a max wait. A plain 2 s debounce never fires while a video plays — the player saves its
+ * position every 5 s — so the SSD copy would lag a whole viewing session behind.
  */
 export function createSaver(save: () => void, opts: { delayMs: number; maxWaitMs: number }): Saver {
   let quiet: ReturnType<typeof setTimeout> | null = null;

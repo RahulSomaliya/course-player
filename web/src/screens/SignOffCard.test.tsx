@@ -1,17 +1,18 @@
 // @vitest-environment jsdom
-// The sign-off card against a real StudyController (jsdom). The send is deferred by hand: the local POST
-// can take a moment, and everything the card does while it is in flight is where its bugs lived.
+// The sign-off card against a real StudyController + JourneyStore (jsdom). The POST and the delivery
+// answer are deferred by hand: everything the card does while they are in flight is where its bugs lived.
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { JourneySession, ProgressSnapshot } from '../../../shared/types';
+import type { JourneySession, OutboxState, OutboxUpdate, ProgressSnapshot } from '../../../shared/types';
 import { AppContext, type AppValue } from '../app/context';
 import { indexCourse } from '../lib/course';
-import type { LiveSession, SignOffTarget } from '../lib/session';
+import { newSession } from '../lib/session';
 import type { KeyValueStore } from '../lib/storage';
 import { sampleCourse } from '../lib/test-fixtures';
+import { JourneyContext, JourneyStore } from '../state/journey';
 import { ProgressStore } from '../state/progress';
-import { StudyContext, StudyController, sessionKey } from '../state/study';
+import { StudyContext, StudyController, studyKey } from '../state/study';
 import { SignOffCard, type SignOffOutcome } from './SignOffCard';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -26,7 +27,7 @@ const SNAP: ProgressSnapshot = {
   videoSecondsDone: 0,
   videoSecondsTotal: 4260,
   sectionsDone: [],
-  current: null,
+  current: { sectionNumber: 3, lectureNumber: 1, title: 'Props' },
   days: {},
 };
 const wait = (ms: number) => act(() => new Promise<void>((r) => setTimeout(r, ms)));
@@ -36,41 +37,59 @@ afterEach(() => {
   act(() => root?.unmount());
   root = null;
   document.body.innerHTML = '';
+  vi.restoreAllMocks();
 });
 
-function liveSession(): LiveSession {
-  const now = Date.now();
-  return {
-    id: 'live-1',
-    startedAt: now - 42 * 60_000,
-    lastStudyAt: now - 1000,
-    seconds: 42 * 60,
-    sectionSeconds: { 3: 42 * 60 },
-    lecturesCompleted: [],
-    finishedSections: [],
-  };
-}
+type Answer = { state: 'delivered' } | { state: 'queued' } | { state: 'rejected'; error: string };
+const outboxWith = (id: string, a: Answer, session: JourneySession): OutboxState => {
+  const u: OutboxUpdate =
+    a.state === 'delivered'
+      ? { id, state: 'delivered', at: '2026-10-05T10:00:00Z', error: null }
+      : a.state === 'queued'
+        ? { id, state: 'queued', at: session.endedAt, error: null, session }
+        : { id, state: 'rejected', at: '2026-10-05T10:00:00Z', error: a.error, session };
+  return { pending: a.state === 'queued' ? 1 : 0, lastError: null, updates: [u] };
+};
 
-/** A card on a 42-min live session whose send resolves only when the test says so. */
-function mount(opts: { quitting?: boolean; targets?: (study: StudyController) => SignOffTarget[] } = {}) {
-  const data = new Map([[sessionKey(course.id, 'mansi'), JSON.stringify(liveSession())]]);
+/**
+ * A card on a session started 83 min ago (or none). `post` = what the course server does with the POST
+ * (resolve = 202 at once by default); `delivery` = what GET outbox?wait= answers for the update.
+ */
+function mount(opts: { mode?: 'session' | 'note'; quitting?: boolean; running?: boolean; connected?: boolean; post?: 'ok' | 'hold' | 'fail'; delivery?: Answer | 'hold' } = {}) {
+  const data = new Map<string, string>();
+  if (opts.running ?? true) data.set(studyKey(course.id, 'mansi'), JSON.stringify(newSession('live-1', Date.now() - 83 * 60_000 - 5_000, false)));
   const storage: KeyValueStore = { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => void data.set(k, v), removeItem: (k) => void data.delete(k) };
   const sent: JourneySession[] = [];
-  let release: () => void = () => undefined;
-  // the local POST may be slow (the course server's disk, or an older server that waited for JS Journey)
-  const send = (s: JourneySession): Promise<void> =>
-    new Promise<void>((r) => {
-      sent.push(s);
-      release = r;
-    });
+  let releasePost: () => void = () => undefined;
+  let releaseDelivery: (a: Answer) => void = () => undefined;
+  const send = (s: JourneySession): Promise<void> => {
+    sent.push(s);
+    if (opts.post === 'fail') return Promise.reject(new Error('server down'));
+    if (opts.post === 'hold') return new Promise<void>((r) => (releasePost = r));
+    return Promise.resolve();
+  };
+  const outbox = (): Promise<OutboxState> => {
+    const last = sent.at(-1);
+    if (!last) return Promise.resolve({ pending: 0, lastError: null, updates: [] });
+    if (opts.delivery === 'hold') return new Promise((r) => (releaseDelivery = (a) => r(outboxWith(last.id, a, last))));
+    return Promise.resolve(outboxWith(last.id, opts.delivery ?? { state: 'delivered' }, last));
+  };
   const progress = new ProgressStore({ courseId: course.id, profile: 'mansi', storage, api: { get: async () => null, put: async () => undefined } });
-  const study = new StudyController({ courseId: course.id, profile: 'mansi', progress, index, storage, isConnected: () => true, send, snapshot: () => SNAP });
+  const study = new StudyController({ courseId: course.id, legacyCourseId: course.id, profile: 'mansi', progress, index, storage, send, snapshot: () => SNAP });
   study.resume();
+  const journey = new JourneyStore({
+    courseId: course.id,
+    profile: 'mansi',
+    storage,
+    isConnected: () => opts.connected ?? true,
+    api: { status: async () => null, feed: async () => null, read: async () => undefined, outbox, retry: outbox },
+  });
   const app: AppValue = {
     course,
     index,
-    profile: { id: 'mansi', name: 'Mansi', journeyConnected: true },
+    profile: { id: 'mansi', name: 'Mansi', journeyConnected: opts.connected ?? true },
     openSignOff: () => undefined,
+    openNote: () => undefined,
     quit: () => undefined,
     updateProfile: () => undefined,
   };
@@ -78,19 +97,31 @@ function mount(opts: { quitting?: boolean; targets?: (study: StudyController) =>
   const container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
-  const tree = (children: ReactNode) => createElement(AppContext.Provider, { value: app }, createElement(StudyContext.Provider, { value: study }, children));
+  const tree = (children: ReactNode) =>
+    createElement(
+      AppContext.Provider,
+      { value: app },
+      createElement(JourneyContext.Provider, { value: journey }, createElement(StudyContext.Provider, { value: study }, children)),
+    );
   // Like App.tsx cardDone: record the outcome and unmount the card.
   const onDone = vi.fn((o: SignOffOutcome) => {
     outcomes.push(o);
     root?.render(tree(null));
   });
-  const targets = opts.targets?.(study) ?? study.queue();
-  act(() => root?.render(tree(createElement(SignOffCard, { targets, quitting: opts.quitting ?? false, onDone }))));
-  return { study, sent, outcomes, release: () => release(), unmount: () => act(() => root?.render(tree(null))) };
+  act(() => root?.render(tree(createElement(SignOffCard, { mode: opts.mode ?? 'session', quitting: opts.quitting ?? false, onDone }))));
+  return {
+    study,
+    progress,
+    sent,
+    outcomes,
+    releasePost: () => releasePost(),
+    releaseDelivery: (a: Answer) => releaseDelivery(a),
+    unmount: () => act(() => root?.render(tree(null))),
+  };
 }
 
 function button(label: string): HTMLButtonElement {
-  const b = [...document.querySelectorAll('button')].find((x) => x.textContent?.includes(label) || x.getAttribute('aria-label') === label);
+  const b = [...document.querySelectorAll('button')].find((x) => x.textContent?.trim() === label || x.getAttribute('aria-label') === label);
   if (!b) throw new Error(`no button "${label}"`);
   return b;
 }
@@ -99,70 +130,210 @@ const primary = (): HTMLButtonElement => {
   if (!b) throw new Error('no primary button');
   return b;
 };
+const field = (label: string): HTMLInputElement => {
+  const f = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+  if (!f) throw new Error(`no field "${label}"`);
+  return f;
+};
+function type(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  act(() => {
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, 'value')?.set?.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+const note = (): HTMLTextAreaElement => {
+  const t = document.querySelector('textarea');
+  if (!t) throw new Error('no note field');
+  return t;
+};
+const text = (sel: string): string => document.querySelector(sel)?.textContent ?? '';
 
-describe('SignOffCard: closing while Send is in flight', () => {
-  // Review 2026-10-01: ×/Escape/scrim stayed live while sending. The card unmounted on close(false),
-  // then the slow send resolved and its leftover timer fired onDone({completed: true}) a second time —
-  // App's stale cardDone still had quitting: true and stopped the server she chose to keep studying on.
-  it('×, Escape and the scrim do nothing until the send settles; onDone fires exactly once', async () => {
+describe('SignOffCard: what she sees before Send (spec v3 A5)', () => {
+  it('"Timer: 1h 23m · started …" and Time studied prefilled from the timer, rounded down', () => {
+    mount();
+    expect(text('[data-signoff="timer"]')).toMatch(/^Timer: 1h 23m · started \d{1,2}:\d{2}$/);
+    expect(field('Hours').value).toBe('1');
+    expect(field('Minutes').value).toBe('23');
+    expect(primary().textContent).toBe('Send to Rahul');
+    expect(primary().disabled).toBe(false);
+  });
+
+  it('never above the timer: an inline reason, and Send waits', () => {
+    mount();
+    type(field('Minutes'), '30');
+    expect(document.body.textContent).toContain('That’s more than the timer (1h 23m).');
+    expect(primary().disabled).toBe(true);
+    type(field('Minutes'), '10');
+    expect(primary().disabled).toBe(false);
+  });
+
+  it('nothing to send (0 min, no note): Send is disabled WITH the reason; a note enables it', () => {
+    mount();
+    type(field('Hours'), '0');
+    type(field('Minutes'), '0');
+    expect(primary().disabled).toBe(true);
+    expect(text('[data-signoff="reason"]')).toBe('Add the time you studied, or a note.');
+    type(note(), 'read about keys');
+    expect(primary().disabled).toBe(false);
+  });
+
+  it('Note to Rahul…: no timer, no time fields; the note is required', () => {
+    mount({ mode: 'note', running: false });
+    expect(document.querySelector('[data-signoff]')?.getAttribute('data-signoff')).toBe('note');
+    expect(document.querySelector('input[aria-label="Hours"]')).toBeNull();
+    expect(primary().disabled).toBe(true);
+    expect(text('[data-signoff="reason"]')).toBe('Write a note for Rahul.');
+  });
+});
+
+describe('SignOffCard: Send and the confirmation', () => {
+  it('delivered → "Sent to Rahul" + what was logged; it stays until Done', async () => {
+    const card = mount();
+    type(note(), 'props finally clicked');
+    await act(async () => primary().click());
+    expect(card.sent[0]).toMatchObject({ id: 'live-1', minutes: 83, note: 'props finally clicked' });
+    expect(document.querySelector('[data-signoff-result]')?.getAttribute('data-signoff-result')).toBe('delivered');
+    expect(document.body.textContent).toContain('Sent to Rahul');
+    expect(document.body.textContent).toContain('1h 23m logged · note included');
+    await wait(1500); // never a sub-second flash
+    expect(document.querySelector('[data-signoff-result]')).not.toBeNull();
+    expect(card.outcomes).toEqual([]);
+    act(() => button('Done').click());
+    await wait(250);
+    expect(card.outcomes).toEqual([{ sent: 1, quit: false }]);
+  });
+
+  it('the timer stops the moment the outbox has it — before the delivery answer', async () => {
+    const card = mount({ delivery: 'hold' });
+    await act(async () => primary().click());
+    expect(card.study.getState().session).toBeNull();
+    expect(primary().textContent).toBe('Sending…');
+    expect(primary().getAttribute('aria-disabled')).toBe('true');
+    expect(primary().disabled).toBe(false); // busy is never the faded "undone" look
+    await act(async () => card.releaseDelivery({ state: 'queued' }));
+    expect(document.querySelector('[data-signoff-result]')?.getAttribute('data-signoff-result')).toBe('saved');
+    expect(document.body.textContent).toContain('It will reach Rahul as soon as you’re online.');
+  });
+
+  it('not connected: "Saved" says it goes once JS Journey is connected', async () => {
+    mount({ connected: false, delivery: { state: 'queued' } });
+    await act(async () => primary().click());
+    expect(document.body.textContent).toContain('once JS Journey is connected');
+  });
+
+  it('the minutes she sends are credited to her study days', async () => {
+    const card = mount();
+    await card.progress.hydrate();
+    type(field('Minutes'), '0');
+    await act(async () => primary().click());
+    const total = Object.values(card.progress.get().days).reduce((a, b) => a + b, 0);
+    expect(total).toBe(60 * 60);
+  });
+
+  // 2026-10-05: JS Journey refused her update and nobody knew. Refused = back on the form, her words kept.
+  it('rejected → stays on the form with the reason; Try again re-sends the SAME update with her edits', async () => {
+    const card = mount({ delivery: { state: 'rejected', error: 'HTTP 404 — unknown course' } });
+    type(note(), 'first words');
+    await act(async () => primary().click());
+    expect(text('[data-signoff="error"]')).toBe('Didn’t reach Rahul — unknown course (HTTP 404)');
+    expect(note().value).toBe('first words');
+    expect(primary().textContent).toBe('Try again');
+    expect(field('Hours').disabled).toBe(true); // its time was logged at the first Send
+    type(note(), 'second words');
+    await act(async () => primary().click());
+    expect(card.sent.map((s) => [s.id, s.note, s.minutes])).toEqual([
+      ['live-1', 'first words', 83],
+      ['live-1', 'second words', 83],
+    ]);
+  });
+
+  it('the course server did not take it: the timer keeps running and she can send again', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const card = mount({ post: 'fail' });
+    await act(async () => primary().click());
+    expect(text('[data-signoff="error"]')).toBe('Couldn’t hand it to the course app — is it still running? Try again.');
+    expect(card.study.getState().session?.id).toBe('live-1');
+    expect(primary().textContent).toBe('Send to Rahul');
+  });
+
+  it('Send & quit (from Quit) → the confirmation\'s button quits', async () => {
     const card = mount({ quitting: true });
-    act(() => button('Sign off & quit').click()); // Send is now in flight
+    expect(primary().textContent).toBe('Send & quit');
+    await act(async () => primary().click());
+    act(() => button('Quit').click());
+    await wait(250);
+    expect(card.outcomes).toEqual([{ sent: 1, quit: true }]);
+  });
+});
+
+describe('SignOffCard: not now, discard, quit', () => {
+  it('× = not now: the timer keeps running, nothing sent', async () => {
+    const card = mount();
+    act(() => button('Not now').click());
+    await wait(250);
+    expect(card.outcomes).toEqual([{ sent: 0, quit: false }]);
+    expect(card.study.getState().session?.id).toBe('live-1');
+    expect(card.sent).toEqual([]);
+  });
+
+  it('Discard is confirmed in place ("Discard 1h 23m? · Yes, discard"), sends nothing, credits nothing', async () => {
+    const card = mount();
+    act(() => button('Discard').click());
+    expect(document.body.textContent).toContain('Discard 1h 23m?');
+    act(() => button('Keep').click());
+    expect(card.study.getState().session).not.toBeNull();
+    act(() => button('Discard').click());
+    act(() => button('Yes, discard').click());
+    await wait(250);
+    expect(card.study.getState().session).toBeNull();
+    expect(card.sent).toEqual([]);
+    expect(card.outcomes).toEqual([{ sent: 0, quit: false }]);
+  });
+
+  it('Quit, keep timer: quits without sending — the timer survives the restart', async () => {
+    const card = mount({ quitting: true });
+    act(() => button('Quit, keep timer').click());
+    await wait(250);
+    expect(card.outcomes).toEqual([{ sent: 0, quit: true }]);
+    expect(card.study.getState().session?.id).toBe('live-1');
+  });
+
+  // Review 2026-10-01: ×/Escape/scrim stayed live while sending; the card unmounted, then the slow send
+  // resolved and a leftover timer reported a SECOND outcome — App quit after "keep studying".
+  it('while the hand-over is in flight ×, Escape and the scrim do nothing; onDone fires exactly once', async () => {
+    const card = mount({ quitting: true, post: 'hold' });
+    act(() => primary().click());
     expect(button('Not now — keep studying').disabled).toBe(true);
     act(() => button('Not now — keep studying').click());
     act(() => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     act(() => document.querySelector<HTMLElement>('[data-dialog] > [aria-hidden="true"]')?.click());
     await wait(250);
     expect(card.outcomes).toEqual([]);
-
-    await act(async () => card.release()); // the slow POST lands
-    await wait(1000); // SENT_HOLD_MS 650 + LEAVE_MS 180
-    expect(card.outcomes).toEqual([{ sent: 1, completed: true }]);
+    await act(async () => card.releasePost());
+    act(() => button('Quit').click());
+    act(() => button('Quit').click());
+    await wait(250);
+    expect(card.outcomes).toEqual([{ sent: 1, quit: true }]);
   });
 
-  it('a card unmounted while its send is in flight never reports afterwards', async () => {
-    const card = mount({ quitting: true });
-    act(() => button('Sign off & quit').click());
-    card.unmount();
-    await act(async () => card.release());
-    await wait(1000);
-    expect(card.outcomes).toEqual([]);
-  });
-});
-
-describe('SignOffCard: the success moment', () => {
-  // Review 2026-10-01: after the "Sent ✓" hold the button fell back to a 50 %-faded, disabled "Send to
-  // Rahul" while the card left — as if the send was undone.
-  it('"Sent ✓" stays through the exit, at full colour (aria-disabled, never the disabled look)', async () => {
-    const card = mount();
-    act(() => primary().click());
-    expect(primary().disabled).toBe(false);
-    expect(primary().getAttribute('aria-disabled')).toBe('true');
-    await act(async () => card.release());
-    expect(primary().textContent).toContain('Sent');
-    await wait(700); // past the 650 ms hold: the card is leaving
-    expect(document.querySelector('[data-dialog]')).not.toBeNull();
-    expect(primary().textContent).toContain('Sent');
-    expect(primary().disabled).toBe(false);
-    expect(primary().getAttribute('aria-disabled')).toBe('true');
-  });
-});
-
-describe('SignOffCard: a session that already went to Rahul', () => {
-  it('says so and waits for her (no silent advance); her note stays in the field', async () => {
-    const gone: LiveSession = { ...liveSession(), id: 'gone-1' }; // not in the controller any more
-    const card = mount({ targets: (study) => [{ kind: 'pending', session: gone }, ...study.queue()] });
-    const field = document.querySelector('textarea');
-    act(() => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-      setter?.call(field, 'useEffect cleanup confused me');
-      field?.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+  it('once the outbox has it, closing during the delivery wait is safe and reports it as sent', async () => {
+    const card = mount({ delivery: 'hold' });
     await act(async () => primary().click());
-    expect(document.querySelector('[role="alert"]')?.textContent).toMatch(/already went to Rahul/);
-    expect(document.querySelector('textarea')?.value).toBe('useEffect cleanup confused me');
-    expect(card.sent).toEqual([]);
-    expect(primary().textContent).toBe('Next');
+    act(() => button('Not now').click());
+    await wait(250);
+    expect(card.outcomes).toEqual([{ sent: 1, quit: false }]);
+    await act(async () => card.releaseDelivery({ state: 'delivered' })); // late: nothing more happens
+    await wait(50);
+    expect(card.outcomes).toHaveLength(1);
+  });
+
+  it('a card unmounted while its hand-over is in flight never reports afterwards', async () => {
+    const card = mount({ post: 'hold' });
     act(() => primary().click());
-    expect(document.querySelector('[data-signoff]')?.getAttribute('data-signoff')).toBe('live');
+    card.unmount();
+    await act(async () => card.releasePost());
+    await wait(300);
+    expect(card.outcomes).toEqual([]);
   });
 });

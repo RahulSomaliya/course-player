@@ -4,9 +4,11 @@ import type { Course, Profile } from '../../../shared/types';
 import type { CourseIndex } from '../lib/course';
 
 export interface AppActions {
-  /** Sign off → the sign-off card (earlier sessions first; with nothing unsigned, a note-only update). */
+  /** the header chip → the sign-off card for the running session (none running: a note-only update) */
   openSignOff: () => void;
-  /** Quit → with something unsigned, the sign-off card first ("Sign off & quit") → flush → stop → "Stopped". */
+  /** menu "Note to Rahul…" → the sign-off card as a note-only update (no time; a running timer goes on) */
+  openNote: () => void;
+  /** Quit → with the timer running, the sign-off card first ("Send & quit") → flush → stop → "Stopped". */
   quit: () => void;
   /** after connecting/disconnecting JS Journey */
   updateProfile: (p: Profile) => void;
