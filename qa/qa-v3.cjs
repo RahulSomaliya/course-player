@@ -433,7 +433,7 @@ groups.flow = async () => {
     const lectures = await page.$$eval('[role="dialog"] ul li', (ls) => ls.map((l) => l.textContent.trim()));
     const sectionLine = await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] p')].map((p) => p.textContent.trim()).find((t) => /lectures done/.test(t)));
     check('card: the lectures she finished + the section are listed', lectures.length === 3 && /^3 lectures done · §05 /.test(sectionLine ?? ''), '3 titles, "3 lectures done · §05 …"', { lectures, sectionLine }, 'card-summary-1440-light.png');
-    await shot(page, 'card-summary-1440-light.png', 'Sign-off card as she first sees it: "1h 23m studied · started 2:34 pm", the lectures and section — the time is read-only, "Edit time" only if she wants', { mode: 'viewport' });
+    await shot(page, 'card-summary-1440-light.png', 'Sign-off card as she first sees it: "1h 23m studied · started …pm" (12 h), the lectures and section — the time is read-only, "Edit time" only if she wants', { mode: 'viewport' });
     await setTheme(page, 'dark');
     await setWidth(page, 390);
     await sleep(300);

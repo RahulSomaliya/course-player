@@ -59,7 +59,7 @@
    "shots": [
     {
      "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/card-summary-1440-light.png",
-     "caption": "Sign-off card as she first sees it: \"1h 23m studied · started 2:34 pm\", the lectures and section — the time is read-only, \"Edit time\" only if she wants",
+     "caption": "Sign-off card as she first sees it: \"1h 23m studied · started …pm\" (12 h), the lectures and section — the time is read-only, \"Edit time\" only if she wants",
      "check": "pass",
      "note": "4 checks"
     },
