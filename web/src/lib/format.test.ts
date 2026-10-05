@@ -63,10 +63,10 @@ describe('date labels', () => {
 describe('formatMessageTime (when Rahul wrote)', () => {
   const at = (d: number, h: number, m: number): string => new Date(2026, 8, d, h, m).toISOString();
   const today = '2026-09-30'; // Wed
-  it('today / yesterday / this week / older, in local 24 h time', () => {
-    expect(formatMessageTime(at(30, 21, 5), today)).toBe('Today 21:05');
-    expect(formatMessageTime(at(29, 7, 0), today)).toBe('Yesterday 07:00');
-    expect(formatMessageTime(at(26, 18, 30), today)).toBe('Sat 18:30');
+  it('today / yesterday / this week / older, in local 12 h time', () => {
+    expect(formatMessageTime(at(30, 21, 5), today)).toBe('Today 9:05 pm');
+    expect(formatMessageTime(at(29, 7, 0), today)).toBe('Yesterday 7:00 am');
+    expect(formatMessageTime(at(26, 18, 30), today)).toBe('Sat 6:30 pm');
     expect(formatMessageTime(at(22, 9, 0), today)).toBe('Tue 22 Sep');
   });
 });
@@ -85,9 +85,10 @@ describe('the study timer (header chip + sign-off card, spec v3 A4)', () => {
     expect(formatSpokenDuration(83 * 60)).toBe('1 h 23 min');
     expect(formatSpokenDuration(60 * 60)).toBe('1 h');
   });
-  it('formatTimeOfDay: "9:14" · "21:05" (local, 24 h)', () => {
-    expect(formatTimeOfDay(new Date(2026, 9, 5, 9, 14).getTime())).toBe('9:14');
-    expect(formatTimeOfDay(new Date(2026, 9, 5, 21, 5).getTime())).toBe('21:05');
-    expect(formatTimeOfDay(new Date(2026, 9, 5, 0, 0).getTime())).toBe('0:00');
+  it('formatTimeOfDay: "9:14 am" · "9:05 pm" (local, 12 h — Rahul, 2026-10-05: never 24 h)', () => {
+    expect(formatTimeOfDay(new Date(2026, 9, 5, 9, 14).getTime())).toBe('9:14 am');
+    expect(formatTimeOfDay(new Date(2026, 9, 5, 21, 5).getTime())).toBe('9:05 pm');
+    expect(formatTimeOfDay(new Date(2026, 9, 5, 0, 0).getTime())).toBe('12:00 am');
+    expect(formatTimeOfDay(new Date(2026, 9, 5, 12, 30).getTime())).toBe('12:30 pm');
   });
 });

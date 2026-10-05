@@ -5,16 +5,16 @@ import { OVER_DAY, describeSession, parseTime, prefillTime, sentDetail, timeProb
 import { sampleCourse } from './test-fixtures';
 
 const c = sampleCourse(); // §01 Welcome · §02 Part 1 intro · §03 Components
-const START = new Date(2026, 9, 5, 9, 14).getTime(); // Mon 5 Oct, 9:14
+const START = new Date(2026, 9, 5, 9, 14).getTime(); // Mon 5 Oct, 9:14 am
 const session = (over: Partial<StudySession> = {}): StudySession => ({ ...newSession('s', START, false), ...over });
 const lectures = (n: number) => Array.from({ length: n }, (_, i) => ({ section: 3, lecture: i + 1, title: `Lecture ${i + 1}` }));
 
 describe('describeSession (the top of the sign-off card, spec v3 A5)', () => {
-  it('"Timer: 1h 23m · started 9:14", the section she spent the most player time in, the lectures', () => {
+  it('"1h 23m · started 9:14 am", the section she spent the most player time in, the lectures', () => {
     const s = session({ sectionSeconds: { 3: 600, 1: 60 }, lecturesCompleted: lectures(2) });
     expect(describeSession(s, c, START + 83 * 60_000)).toEqual({
       timer: '1h 23m',
-      started: '9:14',
+      started: '9:14 am',
       section: '§03 Components',
       lectures: { shown: ['Lecture 1', 'Lecture 2'], more: 0 },
       overDay: false,
@@ -23,7 +23,7 @@ describe('describeSession (the top of the sign-off card, spec v3 A5)', () => {
 
   it('started on another day → the date too; over 24 h → overDay (the card asks for the real time)', () => {
     const d = describeSession(session(), c, new Date(2026, 9, 6, 10, 0).getTime());
-    expect(d).toMatchObject({ timer: '24h 46m', started: 'Mon 5 Oct, 9:14', overDay: true });
+    expect(d).toMatchObject({ timer: '24h 46m', started: 'Mon 5 Oct, 9:14 am', overDay: true });
   });
 
   it('titles stay compact: 5 at most, then "+N more"; no player time → no section', () => {

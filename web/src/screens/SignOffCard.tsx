@@ -1,10 +1,14 @@
 // The sign-off card = one update for Rahul (docs/spec-v3-study-timer.md A5). Two kinds:
-// - 'session' (the header chip / Quit): "Timer: 1h 23m · started 9:14", Time studied (hours + minutes,
-//   prefilled from the timer unless it ran over 24 h, never above it, ≤ 24 h), what the session recorded,
-//   note, mood, "I'm stuck";
+// - 'session' (the header chip / Quit): the summary as v2 had it — "1h 23m studied · started 9:14 am", the
+//   lectures done, the section — then note, mood, "I'm stuck". The time is READ-ONLY until she asks:
+//   "Edit time" opens hours + minutes (prefilled from the timer, never above it, ≤ 24 h), "Use timer" closes
+//   them (Rahul, 2026-10-05: "editable if she wants to, not always" — always-open fields had pushed the
+//   lectures summary down and read as a form to fill in). A timer over 24 h opens them by itself;
 // - 'note' (menu "Note to Rahul…"): a note-only update — no time, note required; a running timer goes on.
 // ONE primary button, "Send to Rahul" ("Send & quit" from Quit), disabled only when there is nothing to
-// send — with the reason shown.
+// send — with the reason shown ONCE: a time problem sits next to the fields, never again under the button
+// (it printed twice, 2026-10-05). No quiet "Quit, keep timer" / "Quit anyway" (Rahul, 2026-10-05: keep it
+// simple): Quit = "Send & quit", or × to keep studying; once nothing runs, Quit quits straight away.
 //
 // After Send the card becomes a CONFIRMATION that stays until "Done", read from the outbox's delivery
 // state (state/journey.ts awaitDelivery — one GET outbox?wait=), never from the 202: "Sent to Rahul ✓"
@@ -33,7 +37,7 @@ import type { JourneySession } from '../../../shared/types';
 import { Dialog } from '../components/Dialog';
 import { Button, IconButton } from '../components/ui';
 import { useApp } from '../app/context';
-import { formatDuration, plural } from '../lib/format';
+import { formatDuration, formatElapsed, plural } from '../lib/format';
 import { prefersReducedMotion } from '../lib/motion';
 import { readableReason, type Delivery } from '../lib/outbox';
 import { MOODS, canSend, cleanNote, timerMinutes, type Mood, type StudySession } from '../lib/session';
@@ -53,7 +57,7 @@ const focusAfter = (mode: Props['mode']) => (): HTMLElement | null =>
 export interface SignOffOutcome {
   /** updates handed to the outbox (0 or 1) — App refreshes the feed and pushes the snapshot then */
   sent: number;
-  /** stop the server now: "Quit" on the confirmation, or "Quit, keep timer" */
+  /** stop the server now: "Quit" on the confirmation's button (the card opened from Quit) */
   quit: boolean;
 }
 
@@ -79,6 +83,8 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
   const [stuck, setStuck] = useState(false);
   /** Time studied as typed; null = not touched, the fields follow the timer */
   const [typed, setTyped] = useState<{ hours: string; minutes: string } | null>(null);
+  /** she chose "Edit time" (a timer over 24 h opens the fields without it) */
+  const [editing, setEditing] = useState(false);
   /** the session and the moment of Send: the card keeps showing it after the timer stopped */
   const [frozen, setFrozen] = useState<{ session: StudySession; at: number } | null>(null);
   /** in the outbox: a later Send is "Try again" with the same update */
@@ -124,7 +130,8 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
   const problem = isSession && handed === null ? timeProblem(total, max, summary?.overDay === true && typed === null) : null;
   const sendable = isSession ? problem === null && canSend(handed?.minutes ?? total ?? 0, note) : cleanNote(note) !== null;
   const shownError = error ?? (endedElsewhere ? SESSION_ENDED_ELSEWHERE : null);
-  const reason = problem ?? (sendable ? null : isSession ? 'Add the time you studied, or a note.' : 'Write a note for Rahul.');
+  // A time problem is printed next to the fields only — repeating it under the button read as two problems.
+  const reason = problem !== null || sendable ? null : isSession ? 'Add the time you studied, or a note.' : 'Write a note for Rahul.';
   const busy = phase === 'sending' || phase === 'leaving';
   const lectureCount = summary === null ? 0 : summary.lectures.shown.length + summary.lectures.more;
 
@@ -232,8 +239,10 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
   }
 
   const primaryLabel = phase === 'sending' ? 'Sending…' : handed !== null ? 'Try again' : quitting ? 'Send & quit' : 'Send to Rahul';
-  const quietQuit = quitting ? (handed !== null ? 'Quit anyway' : isSession ? 'Quit, keep timer' : 'Quit') : null;
   const timerLocked = busy || handed !== null;
+  const fieldsOpen = summary !== null && (editing || summary.overDay);
+  const studied = total !== null ? formatElapsed(total * 60) : '—';
+  const edited = summary !== null && (summary.overDay || (total !== null && total !== max));
 
   return (
     <Dialog
@@ -251,13 +260,7 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
             <h2 id={titleId} className="text-xl font-semibold text-ink">
               {isSession ? `Nice work, ${profile.name}` : 'A note for Rahul'}
             </h2>
-            {summary !== null ? (
-              <p data-signoff="timer" className="mt-1 text-sm text-ink-muted">
-                Timer: <span className="font-semibold tabular-nums text-ink">{summary.timer}</span> · started {summary.started}
-              </p>
-            ) : (
-              <p className="mt-1 text-sm text-ink-muted">Something you studied away from the player — no time is logged.</p>
-            )}
+            {summary === null && <p className="mt-1 text-sm text-ink-muted">Something you studied away from the player — no time is logged.</p>}
           </div>
           <IconButton
             label={quitting ? 'Not now — keep studying' : 'Not now'}
@@ -270,37 +273,63 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
           </IconButton>
         </div>
 
+        {/* the auto summary (v2): what the timer logged + what she did; the time is editable on demand */}
         {summary !== null && (
-          <fieldset className="mt-5" aria-describedby={timeHint}>
-            <legend className="text-sm font-medium text-ink">Time studied</legend>
-            <div className="mt-2 flex items-center gap-2">
-              <TimeField label="Hours" unit="h" value={hours} disabled={timerLocked} onChange={(v) => setTyped({ hours: v, minutes })} invalid={problem !== null} />
-              <TimeField label="Minutes" unit="m" value={minutes} disabled={timerLocked} onChange={(v) => setTyped({ hours, minutes: v })} invalid={problem !== null} />
-            </div>
-            <p id={timeHint} className={`mt-2 text-sm ${problem ? 'text-ink' : 'text-ink-subtle'}`} aria-live="polite">
-              {problem ??
-                (summary.overDay
-                  ? 'The timer ran longer than a day — set the real time.'
-                  : max === 0
-                    ? 'Under a minute so far.'
-                    : `Up to ${formatDuration(max * 60)} — less if you took breaks.`)}
-            </p>
-          </fieldset>
-        )}
-
-        {summary !== null && (summary.section !== null || lectureCount > 0) && (
           <div className="mt-4 rounded-md bg-sunken px-4 py-3">
-            <p className="text-sm text-ink-muted">{[lectureCount > 0 ? plural(lectureCount, 'lecture') + ' done' : null, summary.section].filter(Boolean).join(' · ')}</p>
-            {summary.lectures.shown.length > 0 && (
-              <ul className="mt-2 space-y-1 text-sm text-ink">
-                {summary.lectures.shown.map((t, i) => (
-                  <li key={`${i}-${t}`} className="flex items-start gap-2">
-                    <Check className="mt-0.5 size-3.5 shrink-0 text-accent" strokeWidth={2} aria-hidden="true" />
-                    <span className="min-w-0">{t}</span>
-                  </li>
-                ))}
-                {summary.lectures.more > 0 && <li className="pl-5.5 text-ink-muted">+{summary.lectures.more} more</li>}
-              </ul>
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="min-w-0 text-sm text-ink-muted">
+                <span data-signoff="studied" className="text-base font-semibold tabular-nums text-ink">
+                  {studied}
+                </span>{' '}
+                studied · <span data-signoff="started">started {summary.started}</span>
+                {edited && <> · timer {summary.timer}</>}
+              </p>
+              {!timerLocked && !summary.overDay && (
+                <button
+                  type="button"
+                  data-control={fieldsOpen ? 'signoff-use-timer' : 'signoff-edit-time'}
+                  onClick={() => {
+                    setTyped(null);
+                    setEditing(!fieldsOpen);
+                  }}
+                  className="shrink-0 rounded-sm px-1 text-sm text-ink-muted underline-offset-4 hover:text-ink hover:underline"
+                >
+                  {fieldsOpen ? 'Use timer' : 'Edit time'}
+                </button>
+              )}
+            </div>
+            {fieldsOpen && (
+              <fieldset className="mt-3" aria-describedby={timeHint}>
+                <legend className="sr-only">Time studied</legend>
+                <div className="flex items-center gap-2">
+                  <TimeField label="Hours" unit="h" value={hours} disabled={timerLocked} onChange={(v) => setTyped({ hours: v, minutes })} invalid={problem !== null} />
+                  <TimeField label="Minutes" unit="m" value={minutes} disabled={timerLocked} onChange={(v) => setTyped({ hours, minutes: v })} invalid={problem !== null} />
+                </div>
+                <p id={timeHint} data-signoff="time-hint" className={`mt-2 text-sm ${problem ? 'text-ink' : 'text-ink-subtle'}`} aria-live="polite">
+                  {problem ??
+                    (summary.overDay
+                      ? 'The timer ran longer than a day — set the real time.'
+                      : max === 0
+                        ? 'Under a minute so far.'
+                        : `Up to ${formatDuration(max * 60)} — less if you took breaks.`)}
+                </p>
+              </fieldset>
+            )}
+            {(summary.section !== null || lectureCount > 0) && (
+              <>
+                <p className="mt-2 text-sm text-ink-muted">{[lectureCount > 0 ? plural(lectureCount, 'lecture') + ' done' : null, summary.section].filter(Boolean).join(' · ')}</p>
+                {summary.lectures.shown.length > 0 && (
+                  <ul className="mt-2 space-y-1 text-sm text-ink">
+                    {summary.lectures.shown.map((t, i) => (
+                      <li key={`${i}-${t}`} className="flex items-start gap-2">
+                        <Check className="mt-0.5 size-3.5 shrink-0 text-accent" strokeWidth={2} aria-hidden="true" />
+                        <span className="min-w-0">{t}</span>
+                      </li>
+                    ))}
+                    {summary.lectures.more > 0 && <li className="pl-5.5 text-ink-muted">+{summary.lectures.more} more</li>}
+                  </ul>
+                )}
+              </>
             )}
           </div>
         )}
@@ -403,11 +432,6 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
               )}
             </div>
           )}
-          {quietQuit && (
-            <Button variant="ghost" disabled={phase === 'sending'} onClick={() => close(true)}>
-              {quietQuit}
-            </Button>
-          )}
           {/* Busy = aria-disabled + no pointer events, NOT `disabled`: the disabled look (50 % opacity)
               read as "undone" (2026-10-01). `disabled` is only for "nothing to send", with the reason. */}
           <Button
@@ -416,7 +440,7 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
             className={`min-w-36 ${busy ? 'pointer-events-none' : ''}`}
             disabled={!busy && !sendable}
             aria-disabled={busy || undefined}
-            aria-describedby={reason ? reasonId : undefined}
+            aria-describedby={problem !== null && fieldsOpen ? timeHint : reason ? reasonId : undefined}
             onClick={() => void send()}
           >
             {primaryLabel}

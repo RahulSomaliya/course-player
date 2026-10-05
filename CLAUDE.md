@@ -19,6 +19,8 @@ Design decisions: `docs/design.md`. First course: `/Volumes/Rahul's SSD/Courses/
 ## Naming
 - User-facing: "lecture" (not video/lesson), "section", "course content", "study time", "session", "Quit",
   "Start studying", "Sign off", "Send to Rahul", "update" (one sign-off), "Note to Rahul…".
+- Clock times are 12 h, "9:14 am", always through `lib/format.ts` `formatTimeOfDay` (= JS Journey `fmtTime`) —
+  Rahul: never 24 h (2026-10-05). Hand-built am/pm, never Intl's day-period text (ICU builds disagree).
 - Code: `lectureId` = path relative to the course root.
 
 ## Architecture map

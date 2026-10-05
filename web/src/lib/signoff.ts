@@ -1,5 +1,5 @@
-// The sign-off card's words (docs/spec-v3-study-timer.md A5): the timer line at the top ("Timer: 1h 23m ·
-// started 9:14"), the Time studied fields she may lower (never above the timer, never above JS Journey's
+// The sign-off card's words (docs/spec-v3-study-timer.md A5): the summary line ("1h 23m studied · started
+// 9:14 am"), the Time studied fields she may open and lower (never above the timer, never above JS Journey's
 // 24 h), what the session recorded, and the confirmation line after Send. Pure; SignOffCard renders it.
 import type { Course, JourneySession } from '../../../shared/types';
 import { localDateKey } from './dates';
@@ -13,7 +13,7 @@ const MAX_TITLES = 5;
 export interface SessionSummary {
   /** "1h 23m" — the wall-clock timer */
   timer: string;
-  /** "9:14", or "Mon 5 Oct, 9:14" when it started on another day */
+  /** "9:14 am", or "Mon 5 Oct, 9:14 am" when it started on another day */
   started: string;
   /** "§07 Thinking In React - State Management"; null = no player time */
   section: string | null;

@@ -110,12 +110,15 @@ v3 makes both impossible and gives her a real receipt.
   note required). Quit with a running session opens the sign-off card first ("Send & quit").
 
 ### A5. Sign-off card
-- Top: "Timer: 1h 23m · started 9:14" (and the date if not today). Then **Time studied** — hours +
-  minutes inputs prefilled with the timer (rounded down to the minute, capped at 24 h), max = timer;
-  validation inline (never above the timer; a timer over 24 h says "longer than a day — set the real time").
+- Top: the v2 summary on a sunken panel — "1h 23m studied · started 9:14 am" (date too if not today), the
+  lectures done, the section. The time is READ-ONLY until she taps **Edit time** (Rahul, 2026-10-05: "editable
+  if she wants to, not always"): hours + minutes inputs prefilled with the timer (rounded down to the
+  minute, capped at 24 h), max = timer, the reason inline next to them and nowhere else; **Use timer**
+  closes them. A timer over 24 h opens them by itself ("longer than a day — set the real time").
+- Every clock time is 12 h ("9:14 am") — in the player and on JS Journey (Rahul, 2026-10-05).
   Review 2026-10-05: a timer over 24 h prefills NOTHING and Send waits until she types her real time — a
   prefilled "24h 0m" let one tap credit a whole day she never studied.
-- Lectures completed (compact, "+N more" past 5), section — as in v2.
+- Lectures completed (compact, "+N more" past 5), section — as in v2, on the same panel.
 - Note (optional; placeholder as v2), 4 moods, "I'm stuck".
 - **One primary button: "Send to Rahul"** ("Send & quit" when quitting). Disabled only when there is
   nothing to send (0 min and no note) with the reason shown.

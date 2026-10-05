@@ -154,21 +154,52 @@ const note = (): HTMLTextAreaElement => {
   return t;
 };
 const text = (sel: string): string => document.querySelector(sel)?.textContent ?? '';
+const editTime = (): void => act(() => button('Edit time').click());
+const timeFields = (): Element | null => document.querySelector('input[aria-label="Hours"]');
+/** how often `s` is on screen — a reason printed twice read as two problems (Rahul, 2026-10-05) */
+const shown = (s: string): number => (document.body.textContent ?? '').split(s).length - 1;
 
 describe('SignOffCard: what she sees before Send (spec v3 A5)', () => {
-  it('"Timer: 1h 23m · started …" and Time studied prefilled from the timer, rounded down', () => {
+  // Rahul, 2026-10-05: "editable if she wants to, not always" — the summary reads like v2 (time, lectures,
+  // section); the time fields only open on "Edit time".
+  it('the summary shows what the timer logged (12 h clock); no time fields until "Edit time"', () => {
     mount();
-    expect(text('[data-signoff="timer"]')).toMatch(/^Timer: 1h 23m · started \d{1,2}:\d{2}$/);
-    expect(field('Hours').value).toBe('1');
-    expect(field('Minutes').value).toBe('23');
+    expect(text('[data-signoff="studied"]')).toBe('1h 23m');
+    expect(text('[data-signoff="started"]')).toMatch(/^started \d{1,2}:\d{2} (am|pm)$/);
+    expect(timeFields()).toBeNull();
     expect(primary().textContent).toBe('Send to Rahul');
     expect(primary().disabled).toBe(false);
+    editTime();
+    expect(field('Hours').value).toBe('1'); // prefilled from the timer, rounded down
+    expect(field('Minutes').value).toBe('23');
   });
 
-  it('never above the timer: an inline reason, and Send waits', () => {
+  it('"Use timer" closes the fields and sends the timer\'s time again', async () => {
+    const card = mount();
+    editTime();
+    type(field('Minutes'), '10');
+    act(() => button('Use timer').click());
+    expect(timeFields()).toBeNull();
+    expect(text('[data-signoff="studied"]')).toBe('1h 23m');
+    await act(async () => primary().click());
+    expect(card.sent[0]).toMatchObject({ minutes: 83 });
+  });
+
+  it('an edited time shows in the summary and is what she sends', async () => {
+    const card = mount();
+    editTime();
+    type(field('Minutes'), '10');
+    expect(text('[data-signoff="studied"]')).toBe('1h 10m');
+    await act(async () => primary().click());
+    expect(card.sent[0]).toMatchObject({ minutes: 70 });
+  });
+
+  it('never above the timer: the reason shows ONCE, next to the fields, and Send waits', () => {
     mount();
+    editTime();
     type(field('Minutes'), '30');
-    expect(document.body.textContent).toContain('That’s more than the timer (1h 23m).');
+    expect(shown('That’s more than the timer (1h 23m).')).toBe(1);
+    expect(document.querySelector('[data-signoff="reason"]')).toBeNull();
     expect(primary().disabled).toBe(true);
     type(field('Minutes'), '10');
     expect(primary().disabled).toBe(false);
@@ -176,6 +207,7 @@ describe('SignOffCard: what she sees before Send (spec v3 A5)', () => {
 
   it('nothing to send (0 min, no note): Send is disabled WITH the reason; a note enables it', () => {
     mount();
+    editTime();
     type(field('Hours'), '0');
     type(field('Minutes'), '0');
     expect(primary().disabled).toBe(true);
@@ -188,9 +220,11 @@ describe('SignOffCard: what she sees before Send (spec v3 A5)', () => {
   // card prefilled "24h 0m" and one tap sent and credited a whole day she never studied.
   it('a forgotten timer (over 24 h) prefills nothing: Send waits until she sets her real time', async () => {
     const card = mount({ startedAgoMs: 63 * 3_600_000 });
+    // open without "Edit time": there is no timer value to keep
     expect([field('Hours').value, field('Minutes').value]).toEqual(['', '']);
     expect(primary().disabled).toBe(true);
-    expect(text('[data-signoff="reason"]')).toBe('The timer ran longer than a day — set the real time.');
+    expect(shown('The timer ran longer than a day — set the real time.')).toBe(1);
+    expect(document.querySelector('[data-signoff="reason"]')).toBeNull();
     type(note(), 'a weekend away');
     expect(primary().disabled).toBe(true); // a note does not answer the question: how long?
     type(field('Hours'), '1');
@@ -246,6 +280,7 @@ describe('SignOffCard: Send and the confirmation', () => {
   it('the minutes she sends are credited to her study days', async () => {
     const card = mount();
     await card.progress.hydrate();
+    editTime();
     type(field('Minutes'), '0');
     await act(async () => primary().click());
     const total = Object.values(card.progress.get().days).reduce((a, b) => a + b, 0);
@@ -260,7 +295,7 @@ describe('SignOffCard: Send and the confirmation', () => {
     expect(text('[data-signoff="error"]')).toBe('Didn’t reach Rahul — unknown course (HTTP 404)');
     expect(note().value).toBe('first words');
     expect(primary().textContent).toBe('Try again');
-    expect(field('Hours').disabled).toBe(true); // its time was logged at the first Send
+    expect(document.querySelector('[data-control="signoff-edit-time"]')).toBeNull(); // its time was logged at the first Send
     type(note(), 'second words');
     await act(async () => primary().click());
     expect(card.sent.map((s) => [s.id, s.note, s.minutes])).toEqual([
@@ -312,11 +347,13 @@ describe('SignOffCard: not now, discard, quit', () => {
     expect(card.outcomes).toEqual([{ sent: 0, quit: false }]);
   });
 
-  it('Quit, keep timer: quits without sending — the timer survives the restart', async () => {
+  // Rahul, 2026-10-05: no quiet "Quit, keep timer" — keep it simple. Quit = Send & quit, or × to keep studying.
+  it('Quit offers only "Send & quit"; × cancels the quit and the timer keeps running', async () => {
     const card = mount({ quitting: true });
-    act(() => button('Quit, keep timer').click());
+    expect([...document.querySelectorAll('button')].filter((b) => /quit/i.test(b.textContent ?? '')).map((b) => b.textContent)).toEqual(['Send & quit']);
+    act(() => button('Not now — keep studying').click());
     await wait(250);
-    expect(card.outcomes).toEqual([{ sent: 0, quit: true }]);
+    expect(card.outcomes).toEqual([{ sent: 0, quit: false }]);
     expect(card.study.getState().session?.id).toBe('live-1');
   });
 

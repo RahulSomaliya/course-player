@@ -143,9 +143,10 @@ study-timer chip and its dot, plan marks, progress) — screenshots catch them m
 - **Watch** — player + details left; the right sidebar (360 px) shows ONLY the current section: overline
   "SECTION 07", title, due date, ‹ › to step sections, lectures, and "Next: §08 …" at the bottom.
   `T` = theatre.
-- **Sign-off card** — a dialog (max 512 px): "Nice work, Mansi" + "Timer: 1h 23m · started 9:14";
-  Time studied (h + m fields, prefilled unless the timer ran over 24 h, ≤ the timer, inline reason in `ink`); what the session recorded
-  on a `sunken` panel (lectures · section, up to 5 ✓ titles, "+N more"); the note (optional), 4 moods,
+- **Sign-off card** — a dialog (max 512 px): "Nice work, Mansi"; a `sunken` panel with "**1h 23m** studied ·
+  started 9:14 am" + a quiet "Edit time" right (opens h + m fields, prefilled unless the timer ran over 24 h,
+  ≤ the timer, the reason inline in `ink` beside them only; "Use timer" closes them), then what the session
+  recorded (lectures · section, up to 5 ✓ titles, "+N more"); the note (optional), 4 moods,
   "I'm stuck"; a quiet "Discard" (confirmed in place) left, ONE primary "Send to Rahul" / "Send & quit"
   right. After Send a confirmation in place: solid accent ✓ disc + "Sent to Rahul" (delivered) or a soft
   ✓ disc + "Saved" (still queued), and "Done". "Note to Rahul…" (menu) is the same card without time.
