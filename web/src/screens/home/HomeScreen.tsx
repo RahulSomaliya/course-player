@@ -49,7 +49,7 @@ export function HomeScreen() {
             <Stats status={journey.status} intro={playIntro} />
             <ThirtyDays intro={playIntro} />
           </div>
-          <YourUpdates feed={journey.feed} readIds={journey.readIds} stale={journey.stale} />
+          <YourUpdates feed={journey.feed} readIds={journey.readIds} stale={journey.stale} outbox={journey.outbox} />
           <section aria-labelledby="content-title">
             <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-line pb-4">
               <h2 id="content-title" className="text-base font-semibold text-ink">

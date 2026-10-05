@@ -1,7 +1,9 @@
-// `#/updates`: all her updates with Rahul's replies (and his notes among them, lib/feed.ts withNotes), newest first — the home layout, paginated with the
-// feed cursor ("Show more"). The first page is the store's feed (already loaded, and it refreshes while
-// this screen is open); later pages are fetched here and live only while the screen is open. The first
-// page as it was at the first "Show more" is kept too (lib/feed.ts mergeUpdatePages says why).
+// `#/updates`: all her updates with Rahul's replies (and his notes among them, lib/feed.ts withNotes),
+// newest first — the home layout, paginated with the feed cursor ("Show more"); updates still in the
+// local outbox (waiting / refused, spec v3 A6) on top. The first page is the store's feed (already
+// loaded, and it refreshes while this screen is open); later pages are fetched here and live only while
+// the screen is open. The first page as it was at the first "Show more" is kept too (lib/feed.ts
+// mergeUpdatePages says why).
 import { useState } from 'react';
 import type { StudentUpdate } from '../../../../shared/types';
 import { useApp } from '../../app/context';
@@ -10,12 +12,13 @@ import { Button } from '../../components/ui';
 import { getFeed } from '../../lib/api';
 import { todayKey } from '../../lib/dates';
 import { mergeUpdatePages, withNotes } from '../../lib/feed';
+import { waitingUpdates } from '../../lib/outbox';
 import { useJourney } from '../../state/journey';
-import { NoteItem, UpdateItem } from './UpdateItem';
+import { NoteItem, UpdateItem, WaitingItem } from './UpdateItem';
 
 export function UpdatesScreen() {
   const { profile } = useApp();
-  const { feed, readIds, stale } = useJourney();
+  const { feed, readIds, stale, outbox } = useJourney();
   /** `frozen` = the first page when "Show more" first ran; `updates` = the older pages from its cursor */
   const [more, setMore] = useState<{ frozen: StudentUpdate[]; updates: StudentUpdate[]; cursor: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -25,6 +28,7 @@ export function UpdatesScreen() {
   const cursor = more === null ? (feed?.nextCursor ?? null) : more.cursor;
   // his notes ride on the first page only: among the updates loaded so far, all of them once complete
   const items = withNotes(updates, feed?.notes ?? [], cursor === null);
+  const waiting = waitingUpdates(outbox, feed);
 
   const loadMore = async (): Promise<void> => {
     if (cursor === null) return;
@@ -53,7 +57,10 @@ export function UpdatesScreen() {
           {stale && <span className="text-ink-subtle"> Offline — showing the last copy.</span>}
         </p>
         <div className="mt-8 border-t border-line">
-          {items.length === 0 ? (
+          {waiting.map((w) => (
+            <WaitingItem key={w.id} waiting={w} today={today} />
+          ))}
+          {items.length === 0 && waiting.length === 0 ? (
             <p className="py-10 text-ink-muted">No updates yet. When you sign off, your update for Rahul shows up here.</p>
           ) : (
             items.map((i) =>

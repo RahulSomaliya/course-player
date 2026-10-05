@@ -3,8 +3,15 @@
 // the top already shows it in full, and repeating it here put ~10 identical lines on one screen
 // (2026-10-01 review). After Got it it shows in full, as history. #/updates (no From Rahul there) always
 // shows the full reply and the New tag.
+// v3 (spec A6): an update still in the local outbox is drawn the same way (WaitingItem) with one status
+// line — "Waiting to send", or "Didn't reach Rahul — <reason> · Try again". Not red: calm ink + an icon.
+import { CircleAlert, Clock3 } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { CoachMessage, StudentUpdate } from '../../../../shared/types';
+import { useApp } from '../../app/context';
 import { formatDay, formatDuration, formatMessageTime, plural } from '../../lib/format';
+import { asStudentUpdate, readableReason, type WaitingUpdate } from '../../lib/outbox';
+import { useJourneyStore } from '../../state/journey';
 
 const MOOD_LABELS: Record<string, string> = { '😄': 'Great', '🙂': 'Good', '😐': 'Okay', '😩': 'Tough' };
 
@@ -14,9 +21,11 @@ interface Props {
   readIds: ReadonlySet<string>;
   /** home: an unread reply is shown above in "From Rahul" — here it is one line pointing there */
   unreadAbove?: boolean;
+  /** v3: the delivery line of an update still in the outbox (WaitingItem) */
+  status?: ReactNode;
 }
 
-export function UpdateItem({ update, today, readIds, unreadAbove = false }: Props) {
+export function UpdateItem({ update, today, readIds, unreadAbove = false, status }: Props) {
   const facts = [
     update.minutes > 0 ? formatDuration(update.minutes * 60) : 'Note',
     update.sectionNumber !== null ? `§${String(update.sectionNumber).padStart(2, '0')}${update.sectionTitle ? ` ${update.sectionTitle}` : ''}` : null,
@@ -34,6 +43,7 @@ export function UpdateItem({ update, today, readIds, unreadAbove = false }: Prop
         )}
         {update.stuck && <span className="inline-flex h-6 items-center rounded-full bg-accent-soft px-2.5 text-xs font-medium text-accent-ink">Stuck</span>}
       </header>
+      {status}
       {update.note && <p className="mt-2 max-w-[68ch] whitespace-pre-line text-base text-ink">{update.note}</p>}
       {update.replies.length > 0 && (
         <ul className="mt-3 space-y-3 border-l border-line pl-4 sm:ml-1">
@@ -94,3 +104,66 @@ export function NoteItem({ note, today, readIds, unreadAbove = false }: { note: 
     </article>
   );
 }
+
+/** One of her updates still in the outbox (lib/outbox.ts waitingUpdates). "Try again" re-queues it
+ *  (state/journey.ts retry); once delivered it leaves the outbox list and arrives with the feed. */
+export function WaitingItem({ waiting, today }: { waiting: WaitingUpdate; today: string }) {
+  const { course, profile } = useApp();
+  const journey = useJourneyStore();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  const retry = async (): Promise<void> => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await journey.retry(waiting.id);
+    } catch (err) {
+      console.warn(`[journey] could not re-send update ${waiting.id}`, err);
+      if (alive.current) setError('Couldn’t reach the course app — is it still running?');
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  };
+
+  const status =
+    waiting.state === 'queued' ? (
+      <p data-outbox="queued" className="mt-2 flex items-center gap-1.5 text-sm text-ink-muted">
+        <Clock3 className="size-3.5 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+        {profile.journeyConnected ? 'Waiting to send' : 'Waiting to send · connect JS Journey in the settings menu'}
+      </p>
+    ) : (
+      <div data-outbox="rejected" className="mt-2 text-sm text-ink">
+        <p className="flex items-start gap-1.5">
+          <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-ink-muted" strokeWidth={1.75} aria-hidden="true" />
+          <span className="min-w-0">
+            Didn’t reach Rahul — {readableReason(waiting.error)} ·{' '}
+            <button
+              type="button"
+              onClick={() => void retry()}
+              aria-disabled={busy || undefined}
+              className={`rounded-sm font-medium text-accent-ink underline-offset-4 hover:underline ${busy ? 'pointer-events-none' : ''}`}
+            >
+              {busy ? 'Sending…' : 'Try again'}
+            </button>
+          </span>
+        </p>
+        {error && (
+          <p role="alert" className="mt-1 pl-5 text-ink">
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  return <UpdateItem update={asStudentUpdate(waiting.session, course)} today={today} readIds={EMPTY} status={status} />;
+}
+
+const EMPTY: ReadonlySet<string> = new Set();

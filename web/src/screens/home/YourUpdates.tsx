@@ -1,19 +1,32 @@
 // "Your updates" — her latest 3 updates, each with Rahul's replies threaded under it, and his notes from
-// the same days among them (lib/feed.ts withNotes); "See all" opens #/updates. Nothing yet → no block.
-// Offline (the server's last good copy) → a quiet note says so.
-import type { JourneyFeed } from '../../../../shared/types';
+// the same days among them (lib/feed.ts withNotes); "See all" opens #/updates. v3 (spec A6): updates
+// still in the local outbox (waiting / refused) sit on top — listed even before any feed exists, because
+// one that silently never showed up is how the 2026-10-05 sign-off went unnoticed. Nothing at all → no
+// block. Offline (the server's last good copy) → a quiet note says so.
+import type { JourneyFeed, OutboxUpdate } from '../../../../shared/types';
 import { todayKey } from '../../lib/dates';
 import { withNotes } from '../../lib/feed';
+import { waitingUpdates } from '../../lib/outbox';
 import { hrefFor } from '../../lib/router';
-import { NoteItem, UpdateItem } from '../updates/UpdateItem';
+import { NoteItem, UpdateItem, WaitingItem } from '../updates/UpdateItem';
 
 const LATEST = 3;
 
-export function YourUpdates({ feed, readIds, stale }: { feed: JourneyFeed | null; readIds: ReadonlySet<string>; stale: boolean }) {
-  if (feed === null) return null;
-  const more = feed.updates.length > LATEST || feed.nextCursor !== null;
-  const items = withNotes(feed.updates.slice(0, LATEST), feed.notes, !more);
-  if (items.length === 0) return null;
+export function YourUpdates({
+  feed,
+  readIds,
+  stale,
+  outbox,
+}: {
+  feed: JourneyFeed | null;
+  readIds: ReadonlySet<string>;
+  stale: boolean;
+  outbox: readonly OutboxUpdate[];
+}) {
+  const waiting = waitingUpdates(outbox, feed);
+  const more = feed !== null && (feed.updates.length > LATEST || feed.nextCursor !== null);
+  const items = feed === null ? [] : withNotes(feed.updates.slice(0, LATEST), feed.notes, !more);
+  if (items.length === 0 && waiting.length === 0) return null;
   const today = todayKey();
   return (
     <section aria-labelledby="updates-title">
@@ -29,6 +42,9 @@ export function YourUpdates({ feed, readIds, stale }: { feed: JourneyFeed | null
           </a>
         )}
       </div>
+      {waiting.map((w) => (
+        <WaitingItem key={w.id} waiting={w} today={today} />
+      ))}
       {items.map((i) =>
         i.kind === 'update' ? (
           <UpdateItem key={i.update.id} update={i.update} today={today} readIds={readIds} unreadAbove />
