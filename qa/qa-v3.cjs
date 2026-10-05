@@ -263,6 +263,26 @@ async function storedSession(page) {
     return raw === null ? null : JSON.parse(raw);
   }, STUDY_KEY);
 }
+/** Puts 3 real §05 lectures (from /api/boot) and 50 min of §05 player time into the running session, then
+ *  reloads — so the card's summary shows what a real session records (Rahul asked to see it, 2026-10-05). */
+async function withLectures(page) {
+  await page.evaluate(async (k) => {
+    const boot = await (await fetch('/api/boot')).json();
+    const sec = boot.course.sections.find((x) => x.number === 5);
+    const s = JSON.parse(localStorage.getItem(k));
+    s.lecturesCompleted = sec.lectures.slice(1, 4).map((l) => ({ section: 5, lecture: l.number, title: l.title }));
+    s.sectionSeconds = { 5: 3000 };
+    localStorage.setItem(k, JSON.stringify(s));
+  }, STUDY_KEY);
+  await page.reload({ waitUntil: 'load' });
+  await appReady(page);
+}
+/** Every <time> on the page: 12 h ("9:05 pm") or a date — never a 24 h clock (Rahul, 2026-10-05). */
+async function timesAre12h(page) {
+  const times = await page.$$eval('time', (ts) => ts.map((t) => t.textContent.trim()));
+  const bad = times.filter((t) => /\d{1,2}:\d{2}/.test(t) && !/\b\d{1,2}:\d{2} (am|pm)$/.test(t));
+  return { times, bad, any12h: times.some((t) => /\d{1,2}:\d{2} (am|pm)$/.test(t)) };
+}
 /** Moves the running session's start back to `minutes` (+20 s) ago, then reloads — a long session. */
 async function backdate(page, minutes) {
   await page.evaluate(
@@ -324,6 +344,8 @@ groups.fresh = async () => {
     check('fresh home: "Start studying" in the header is visible on top', await onTop(page, 'header [data-control="start-studying"]'), 'visible', false, 'home-fresh-1440-light.png');
     check('fresh home: "Start studying" in the home hero is visible on top', await onTop(page, '[data-control="start-studying-hero"]'), 'visible', false, 'home-fresh-1440-light.png');
     await page.waitForFunction(() => document.querySelector('[data-morph="thumbnail"] video')?.dataset.ready === 'true', { timeout: 15_000 }).catch(() => console.log('      (hero frame not decoded in 15 s)'));
+    const t12 = await timesAre12h(page);
+    check('home: every time on the page is 12 h ("8:10 am"), none 24 h', t12.bad.length === 0 && t12.any12h, 'all h:mm am|pm', t12.times, 'home-fresh-1440-light.png');
     await shot(page, 'home-fresh-1440-light.png', 'First open, no session: "Start studying" sits in the header and next to Start in the hero', { mode: 'full' });
     await setTheme(page, 'dark');
     await setWidth(page, 390);
@@ -400,10 +422,27 @@ groups.flow = async () => {
     await setWidth(page, 1440);
     await setTheme(page, 'light');
 
-    // 4. the sign-off card
+    // 4. the sign-off card: the v2 summary first; the time is read-only until "Edit time" (Rahul, 2026-10-05)
+    await withLectures(page);
     await openCardFromChip(page);
-    const timerLine = await text(page, '[data-signoff="timer"]');
-    check('card: shows the timer "Timer: 1h 23m · started …"', /^Timer: 1h 23m · started \d{1,2}:\d{2}/.test(timerLine ?? ''), '"Timer: 1h 23m · started h:mm"', timerLine);
+    const studied = await text(page, '[data-signoff="studied"]');
+    const startedText = await text(page, '[data-signoff="started"]');
+    check('card: "1h 23m studied · started h:mm am/pm" (12 h clock)', studied === '1h 23m' && /^started \d{1,2}:\d{2} (am|pm)$/.test(startedText ?? ''), '"1h 23m" + "started h:mm am|pm"', { studied, startedText }, 'card-summary-1440-light.png');
+    const fieldsBefore = (await page.$('input[aria-label="Hours"]')) !== null;
+    check('card: no time fields until she taps "Edit time"', !fieldsBefore && (await onTop(page, '[data-control="signoff-edit-time"]')), 'no fields; "Edit time" visible', { fieldsBefore }, 'card-summary-1440-light.png');
+    const lectures = await page.$$eval('[role="dialog"] ul li', (ls) => ls.map((l) => l.textContent.trim()));
+    const sectionLine = await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] p')].map((p) => p.textContent.trim()).find((t) => /lectures done/.test(t)));
+    check('card: the lectures she finished + the section are listed', lectures.length === 3 && /^3 lectures done · §05 /.test(sectionLine ?? ''), '3 titles, "3 lectures done · §05 …"', { lectures, sectionLine }, 'card-summary-1440-light.png');
+    await shot(page, 'card-summary-1440-light.png', 'Sign-off card as she first sees it: "1h 23m studied · started 2:34 pm", the lectures and section — the time is read-only, "Edit time" only if she wants', { mode: 'viewport' });
+    await setTheme(page, 'dark');
+    await setWidth(page, 390);
+    await sleep(300);
+    await scrollTopDialog(page);
+    await shot(page, 'card-summary-390-dark.png', 'The same card at phone width, dark', { mode: 'viewport' });
+    await setWidth(page, 1440);
+    await setTheme(page, 'light');
+    await clickSel(page, '[data-control="signoff-edit-time"]');
+    await page.waitForSelector('input[aria-label="Hours"]', { visible: true });
     const hrs = await page.$eval('input[aria-label="Hours"]', (e) => e.value);
     const mins = await page.$eval('input[aria-label="Minutes"]', (e) => e.value);
     check('card: Time studied prefilled 1 h 23 m and editable', hrs === '1' && mins === '23' && !(await page.$eval('input[aria-label="Hours"]', (e) => e.disabled)), 'hours 1, minutes 23, enabled', { hrs, mins });
@@ -413,11 +452,13 @@ groups.flow = async () => {
     const primaryDisabled = await page.$eval('[data-control="signoff-primary"]', (e) => e.disabled);
     check('card: more than the timer → inline error', /more than the timer \(1h 23m\)/.test(hint ?? ''), '"That’s more than the timer (1h 23m)."', hint, 'card-over-timer-1440-light.png');
     check('card: more than the timer → Send is disabled', primaryDisabled === true, 'disabled', primaryDisabled, 'card-over-timer-1440-light.png');
+    const times = await page.evaluate(() => (document.body.textContent ?? '').split('That’s more than the timer (1h 23m).').length - 1);
+    check('card: the reason is printed ONCE (not again under Send)', times === 1, '1', times, 'card-over-timer-1440-light.png');
     const sends = await sendButtons(page);
     check('card: exactly ONE send button', sends.length === 1 && sends[0] === 'Send to Rahul', '["Send to Rahul"]', sends, 'card-over-timer-1440-light.png');
     const withoutNote = await page.evaluate(() => /Send without a note/i.test(document.body.textContent ?? ''));
     check('"Send without a note" does not exist anywhere', withoutNote === false, 'absent', withoutNote);
-    await shot(page, 'card-over-timer-1440-light.png', 'Sign-off card: the timer, editable time; 1h 40m is more than the timer → inline error, Send held; one Send button', { mode: 'viewport' });
+    await shot(page, 'card-over-timer-1440-light.png', 'After "Edit time": 1h 40m is more than the timer → the reason once, beside the fields; Send held; one Send button', { mode: 'viewport' });
     await setTheme(page, 'dark');
     await setWidth(page, 390);
     await sleep(300);
@@ -486,9 +527,9 @@ groups.quit = async () => {
     await clickSel(page, 'button[aria-label="Quit the course player"]');
     await page.waitForSelector('[role="dialog"] [data-signoff="session"]', { visible: true });
     const primary = await text(page, '[data-control="signoff-primary"]');
-    const quietQuit = await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].map((x) => x.textContent.trim()).filter((t) => /Quit/.test(t)));
+    const quietQuit = await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].map((x) => x.textContent.trim()).filter((t) => /quit/i.test(t))); // case-insensitive: the primary is "Send & quit"
     check('Quit with a running timer: the card opens with "Send & quit"', primary === 'Send & quit', '"Send & quit"', primary, 'quit-1440-dark.png');
-    check('Quit card: a quiet "Quit, keep timer" too', quietQuit.includes('Quit, keep timer'), 'includes "Quit, keep timer"', quietQuit, 'quit-1440-dark.png');
+    check('Quit card: no quiet "Quit, keep timer" — "Send & quit" is the only Quit button', quietQuit.length === 1 && quietQuit[0] === 'Send & quit', '["Send & quit"]', quietQuit, 'quit-1440-dark.png');
     await shot(page, 'quit-1440-dark.png', 'Quit while the timer runs: the sign-off card opens first, primary "Send & quit"', { mode: 'viewport' });
     await page.click('[role="dialog"] button[aria-label="Not now — keep studying"]');
     await page.waitForFunction(() => !document.querySelector('[role="dialog"]'), { timeout: 5000 });
@@ -833,6 +874,10 @@ groups.jj = async () => {
   check('/m?course=js: JS summary + her JS updates + his JS notes', ['163h 5m over 68 study days', 'Mapty refactor done', ...JS_NOTES].every((x) => mJs.includes(x)), 'summary, updates and the 3 JS notes', ['163h 5m over 68 study days', 'Mapty refactor done', ...JS_NOTES].filter((x) => !mJs.includes(x)), 'jj-m-js-1440-light.png');
   check('/m?course=js: read-only — no From Rahul, no sign-off, no "New"', !/From Rahul|Sign off|\bNew\b/.test(mJs), 'none', (mJs.match(/From Rahul|Sign off|\bNew\b/g) ?? []));
   check('/r: his notes list holds only React-era notes', JS_NOTES.every((n) => !rHome.includes(n)) && rHome.includes('Three weeks in'), 'React note only', JS_NOTES.filter((n) => rHome.includes(n)), 'jj-r-home-1440-light.png');
+  const clock24 = /(Today|Yesterday|Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{1,2}:\d{2}(?! ?[ap]m)/;
+  for (const [n, t] of [['m-home', mHome], ['r-home', rHome]]) {
+    check(`${n}: clock times are 12 h, none 24 h`, !clock24.test(t) && /\d{1,2}:\d{2} [ap]m/.test(t), 'h:mm am|pm only', t.match(clock24)?.[0] ?? null, `jj-${n}-1440-light.png`);
+  }
   check('/r?course=js: his JS notes are listed', JS_NOTES.every((n) => rJs.includes(n)) && !rJs.includes('Three weeks in'), 'the 3 JS notes, no React note', JS_NOTES.filter((n) => !rJs.includes(n)), 'jj-r-js-1440-light.png');
   const b = await launch('jj', true);
   try {
@@ -915,7 +960,7 @@ groups.gallery = async () => {
     subtitle: 'Course Player v3 in headless Chrome against the SSD course and a stand-in JS Journey, plus the JS Journey pages rendered from test data.',
     meta: {
       'App build': `0.1.0 · study-timer ${process.env.QA_SHA ?? ''} (web built ${process.env.QA_BUILT ?? 'today'})`.replace(/\s+/g, ' '),
-      Tests: '458 app · 346 JS Journey',
+      Tests: '460 app · 346 JS Journey',
       Checks: `${passed}/${checks.length} passed`,
       Date: '5 Oct 2026',
     },
