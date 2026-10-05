@@ -1,12 +1,15 @@
+// @vitest-environment jsdom
+// jsdom: the two-window tests fire the browser's `storage` / `focus` events at StudyController.start().
 import { describe, expect, it, vi } from 'vitest';
 import type { JourneySession, ProgressSnapshot, ProgressState } from '../../../shared/types';
+import { ApiError } from '../lib/api';
 import { indexCourse } from '../lib/course';
 import { withLast } from '../lib/progress';
 import type { SignOffAnswer } from '../lib/session';
 import type { KeyValueStore } from '../lib/storage';
 import { sampleCourse } from '../lib/test-fixtures';
 import { ProgressStore } from './progress';
-import { StudyController, studyKey } from './study';
+import { SESSION_ENDED_ELSEWHERE, StudyController, studyKey } from './study';
 
 function memoryStore(init: Record<string, string> = {}): KeyValueStore & { data: Map<string, string> } {
   const data = new Map(Object.entries(init));
@@ -36,6 +39,8 @@ type Opts = {
   send?: (s: JourneySession) => Promise<unknown>;
   start?: Date;
   snapshot?: (state?: ProgressState) => ProgressSnapshot;
+  /** session ids are `<prefix>-1`, `<prefix>-2`… — two windows must not mint the same ones */
+  prefix?: string;
 };
 
 function setup(opts: Opts = {}) {
@@ -62,7 +67,7 @@ function setup(opts: Opts = {}) {
     snapshot: opts.snapshot ?? ((state) => ({ ...SNAP, days: state?.days ?? {} })),
     clock: { now: () => epoch, perf: () => perf },
     isVisible: () => true,
-    newId: () => `id-${++n}`,
+    newId: () => `${opts.prefix ?? 'id'}-${++n}`,
   });
   /** wall-clock time passing with the app open (the 1 s ticker runs) */
   const advance = (seconds: number): void => {
@@ -129,7 +134,7 @@ describe('StudyController: the wall-clock study timer (spec v3 A3)', () => {
     play(5, 90); // §03
     play(0, 30); // §01
     expect(progress.get().days).toEqual({});
-    const r = await study.signOff(answer({ minutes: 2 }));
+    const r = await study.signOff('id-1', answer({ minutes: 2 }));
     expect(r.ok && r.update.sectionNumber).toBe(3);
   });
 
@@ -175,7 +180,7 @@ describe('StudyController: Send to Rahul', () => {
     study.startSession();
     const startedAt = now();
     jump(83 * MIN + 20_000);
-    const r = await study.signOff(answer({ minutes: 60, mood: '😄', note: 'props clicked', stuck: true }));
+    const r = await study.signOff('id-1', answer({ minutes: 60, mood: '😄', note: 'props clicked', stuck: true }));
     expect(r.ok).toBe(true);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({
@@ -196,7 +201,7 @@ describe('StudyController: Send to Rahul', () => {
     const { study, sent, jump } = setup();
     study.startSession();
     jump(10 * MIN);
-    await study.signOff(answer({ minutes: 90 }));
+    await study.signOff('id-1', answer({ minutes: 90 }));
     expect(sent[0]?.minutes).toBe(10);
   });
 
@@ -205,7 +210,7 @@ describe('StudyController: Send to Rahul', () => {
     await progress.hydrate();
     study.startSession();
     jump(3 * 60 * MIN); // 23:00 → 02:00: 1 h before midnight, 2 h after
-    await study.signOff(answer({ minutes: 60 }));
+    await study.signOff('id-1', answer({ minutes: 60 }));
     expect(progress.get().days).toEqual({ '2026-10-05': 1200, '2026-10-06': 2400 });
     expect(sent[0]?.progress?.days).toEqual({ '2026-10-05': 1200, '2026-10-06': 2400 });
   });
@@ -213,8 +218,8 @@ describe('StudyController: Send to Rahul', () => {
   it('nothing to send (0 min, no note): refused with the reason, nothing posted, the timer keeps running', async () => {
     const { study, sent } = setup();
     study.startSession();
-    const r = await study.signOff(answer({ mood: '🙂' }));
-    expect(r).toEqual({ ok: false, error: 'Add the time you studied, or a note.' });
+    const r = await study.signOff('id-1', answer({ mood: '🙂' }));
+    expect(r).toEqual({ ok: false, error: 'Add the time you studied, or a note.', alreadyDelivered: false });
     expect(sent).toHaveLength(0);
     expect(study.getState().session).not.toBeNull();
   });
@@ -225,8 +230,8 @@ describe('StudyController: Send to Rahul', () => {
     await progress.hydrate();
     study.startSession();
     jump(30 * MIN);
-    const r = await study.signOff(answer({ minutes: 30 }));
-    expect(r).toEqual({ ok: false, error: 'Couldn’t hand it to the course app — is it still running? Try again.' });
+    const r = await study.signOff('id-1', answer({ minutes: 30 }));
+    expect(r).toEqual({ ok: false, error: 'Couldn’t hand it to the course app — is it still running? Try again.', alreadyDelivered: false });
     expect(study.getState().session).not.toBeNull();
     expect(progress.get().days).toEqual({});
     expect(err).toHaveBeenCalled();
@@ -238,7 +243,7 @@ describe('StudyController: Send to Rahul', () => {
     const { study, sent, jump } = setup();
     study.startSession();
     jump(20 * MIN);
-    await study.signOff(answer({ minutes: 20 }));
+    await study.signOff('id-1', answer({ minutes: 20 }));
     expect(sent.map((s) => s.minutes)).toEqual([20]);
   });
 
@@ -252,7 +257,7 @@ describe('StudyController: Send to Rahul', () => {
     expect(sent[0]).toMatchObject({ id: 'id-2', minutes: 0, sectionNumber: 3, note: 'Read the docs on my phone' });
     expect(study.getState().session?.id).toBe('id-1');
     expect(progress.get().days).toEqual({});
-    await expect(study.sendNote(answer({ note: '  ' }))).resolves.toEqual({ ok: false, error: 'Write a note for Rahul.' });
+    await expect(study.sendNote(answer({ note: '  ' }))).resolves.toEqual({ ok: false, error: 'Write a note for Rahul.', alreadyDelivered: false });
   });
 
   // Review 2026-10-01: with every lecture done there is no current section, and section 0 got JS
@@ -273,7 +278,7 @@ describe('StudyController: Send to Rahul', () => {
     await progress.hydrate();
     study.startSession();
     jump(40 * MIN);
-    const first = await study.signOff(answer({ minutes: 40, note: 'first try' }));
+    const first = await study.signOff('id-1', answer({ minutes: 40, note: 'first try' }));
     if (!first.ok) throw new Error('expected the hand-over to work');
     const daysAfterFirst = progress.get().days;
     await study.resend({ ...first.update, note: 'second try' });
@@ -289,7 +294,7 @@ describe('StudyController: Send to Rahul', () => {
     await progress.hydrate();
     study.startSession();
     jump(3 * MIN);
-    study.discard();
+    study.discard('id-1');
     expect(study.getState().session).toBeNull();
     expect(storage.data.has(studyKey(course.id, 'mansi'))).toBe(false);
     expect(sent).toHaveLength(0);
@@ -342,6 +347,27 @@ describe('StudyController: v2 state left in this browser (spec v3 A3 "Legacy v2 
 
   // Review 2026-10-01: an update's snapshot (takenAt = now, so JS Journey keeps it as the newest) built
   // from a cleared browser's empty copy overwrote the coach's numbers. It must come from the SSD copy.
+  // A run that delivered some, then stopped (server down), keeps the keys: the next run posts them again,
+  // and one whose body came out different (her current section is the fallback) is refused with a 409 —
+  // it IS with Rahul. Stopping there would strand every v2 session after it.
+  it('one the server says already reached Rahul (409) counts as done: the rest still go, then the keys go', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const key = `cp:${course.id}:mansi:pending`;
+    const storage = memoryStore({ [key]: JSON.stringify([v2('tue', 72 * 60), v2('wed', 30 * 60)]) });
+    const sent: string[] = [];
+    const { study } = setup({
+      storage,
+      send: async (s) => {
+        if (s.id === 'tue') throw new ApiError(409, 'This update already reached Rahul — what you changed can’t be added to it. Send it as a Note to Rahul… instead.');
+        sent.push(s.id);
+      },
+    });
+    expect(await study.migrateLegacy()).toBe(1);
+    expect(sent).toEqual(['wed']);
+    expect(storage.data.has(key)).toBe(false);
+    err.mockRestore();
+  });
+
   it('waits for the SSD progress copy before building the updates', async () => {
     const storage = memoryStore({ [`cp:${course.id}:mansi:session`]: JSON.stringify(v2('live', 42 * 60)) });
     const { study, progress, sent } = setup({ storage });
@@ -364,5 +390,103 @@ describe('StudyController: v2 state left in this browser (spec v3 A3 "Legacy v2 
     await study.migrateLegacy();
     await settle();
     expect(sent).toEqual([]);
+  });
+});
+
+// Review 2026-10-05: a 2nd launcher double-click opens a 2nd tab, and closing the Terminal leaves the old
+// one open. Each tab read the session key once, at open: after tab B sent the session, tab A's chip kept
+// ticking, she signed off there too, JS Journey answered "duplicate" for the same id and stored nothing
+// while the card said "Sent to Rahul ✓ · note included" — her 2nd note lost, her days credited twice, and
+// tab A wrote the sent session back, so it was running again on the next open.
+describe('StudyController: two windows of the app (one browser, one session key)', () => {
+  const KEY = studyKey(course.id, 'mansi');
+  const stored = (storage: { data: Map<string, string> }): { id: string; lecturesCompleted: { lecture: number }[] } | null =>
+    JSON.parse(storage.data.get(KEY) ?? 'null') as { id: string; lecturesCompleted: { lecture: number }[] } | null;
+  /** window A started session a-1 an hour ago; window B was opened since and shows it too */
+  function twoWindows() {
+    const storage = memoryStore();
+    const a = setup({ storage, prefix: 'a' });
+    a.study.startSession();
+    a.jump(60 * MIN);
+    const b = setup({ storage, prefix: 'b', start: new Date(a.now()) });
+    b.study.resume();
+    return { storage, a, b };
+  }
+
+  it('a session sent from one window is never sent again from the other: refused, nothing posted, nothing credited, its timer stops', async () => {
+    const { storage, a, b } = twoWindows();
+    await a.progress.hydrate();
+    await b.progress.hydrate();
+    expect((await b.study.signOff('a-1', answer({ minutes: 60, note: 'first note' }))).ok).toBe(true);
+    a.jump(5 * MIN);
+    expect(await a.study.signOff('a-1', answer({ minutes: 65, note: 'second note' }))).toEqual({ ok: false, error: SESSION_ENDED_ELSEWHERE, alreadyDelivered: false });
+    expect(a.sent).toEqual([]);
+    expect(b.sent.map((s) => [s.id, s.note])).toEqual([['a-1', 'first note']]);
+    expect(a.progress.get().days).toEqual({});
+    expect(a.study.getState().session).toBeNull();
+    expect(storage.data.has(KEY)).toBe(false);
+  });
+
+  it('the other window follows at once (storage event, focus): its chip stops before she touches anything', () => {
+    const { storage, a, b } = twoWindows();
+    const stop = a.study.start();
+    b.study.discard('a-1');
+    // the browser fires `storage` in every OTHER window of the origin; jsdom has one window, so fire it here
+    window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue: null }));
+    expect(a.study.getState().session).toBeNull();
+    b.study.startSession();
+    window.dispatchEvent(new Event('focus')); // a missed event: coming back to the window re-reads it too
+    expect(a.study.getState().session?.id).toBe('b-1');
+    stop();
+    expect(stored(storage)?.id).toBe('b-1');
+  });
+
+  it('a stale window never writes a sent session back (it would be running again on the next open)', async () => {
+    const { storage, a, b } = twoWindows();
+    await b.study.signOff('a-1', answer({ minutes: 60 }));
+    a.play(5, 30); // the player ticks: section time is committed every 15 s
+    a.study.setDone(id(0), true);
+    expect(storage.data.has(KEY)).toBe(false);
+    expect(a.study.getState().session).toBeNull();
+  });
+
+  it('Start studying / auto-start in a window that has not seen the running session joins it — never a 2nd, overlapping timer', () => {
+    const storage = memoryStore();
+    const b = setup({ storage, prefix: 'b' });
+    b.study.resume(); // opened before the session started
+    const a = setup({ storage, prefix: 'a' });
+    a.study.startSession();
+    b.study.autoStart();
+    b.study.startSession();
+    expect(b.study.getState()).toMatchObject({ session: { id: 'a-1' }, notice: null });
+    expect(stored(storage)?.id).toBe('a-1');
+  });
+
+  it('both windows record into the ONE session: lectures marked done in either are kept', () => {
+    const { storage, a, b } = twoWindows();
+    a.study.setDone(id(0), true);
+    b.study.setDone(id(1), true);
+    expect(stored(storage)?.lecturesCompleted.map((l) => l.lecture)).toEqual([1, 2]);
+  });
+
+  it('Discard on a stale card leaves the newer session (started in the other window) alone', () => {
+    const { a, b } = twoWindows();
+    b.study.discard('a-1');
+    b.study.startSession();
+    a.study.discard('a-1');
+    expect(a.study.getState().session?.id).toBe('b-1');
+    expect(b.study.getState().session?.id).toBe('b-1');
+  });
+
+  // The server refuses (409) a CHANGED copy of an update JS Journey already has — it would only answer
+  // "duplicate" and store nothing (server/journey.ts enqueue). Its sentence is hers to read.
+  it('the course server says it already reached Rahul: that sentence, not "is the course app running?"', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const why = 'This update already reached Rahul — what you changed can’t be added to it. Send it as a Note to Rahul… instead.';
+    const { study, jump } = setup({ send: async () => Promise.reject(new ApiError(409, why)) });
+    study.startSession();
+    jump(10 * MIN);
+    expect(await study.signOff('id-1', answer({ minutes: 10 }))).toEqual({ ok: false, error: why, alreadyDelivered: true });
+    err.mockRestore();
   });
 });

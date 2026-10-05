@@ -3,6 +3,14 @@
 // whatever she does meanwhile (coding, GitHub, nothing). It is persisted (`cp:<course>:<profile>:study`)
 // and keeps running through reloads, closed tabs, a stopped server and app restarts.
 //
+// That key is the ONE truth for the session, shared by every window of the app: a 2nd launcher
+// double-click opens a 2nd tab, and closing the Terminal leaves the old tab open. Every action re-reads it
+// first (adopt), other windows follow it on `storage` / `focus`, and an action never writes over a session
+// that ended or changed elsewhere. Review 2026-10-05: each tab read it once, at open — the stale tab's chip
+// kept ticking after the other tab sent the session, she signed off there too, JS Journey answered
+// "duplicate" for the same id and stored nothing while the card said "Sent to Rahul ✓ · note included"
+// (her 2nd note lost, her days credited twice), and the stale tab wrote the sent session back.
+//
 // Never again a silent loss (2026-10-05: her sign-off vanished). So:
 // - Send hands the update to the local server's outbox (POST sessions, 202 = saved there, connected or
 //   not). Only then does the timer stop and her study time get credited — a failed hand-over keeps the
@@ -34,7 +42,8 @@ import {
   type SignOffAnswer,
   type StudySession,
 } from '../lib/session';
-import { readJson, readString, writeJson, writeString, type KeyValueStore } from '../lib/storage';
+import { ApiError } from '../lib/api';
+import { writeString, type KeyValueStore } from '../lib/storage';
 import { StudyTicker, isStudying } from '../lib/ticker';
 import { useProgress, type ProgressStore } from './progress';
 
@@ -51,8 +60,9 @@ export interface StudyState {
   notice: { at: number } | null;
 }
 
-/** ok = in the local outbox (NOT "sent to Rahul" — see the header); else why not, in her words. */
-export type HandOver = { ok: true; update: JourneySession } | { ok: false; error: string };
+/** ok = in the local outbox (NOT "sent to Rahul" — see the header); else why not, in her words.
+ *  `alreadyDelivered`: the server refused it (409) because JS Journey already has this update's id. */
+export type HandOver = { ok: true; update: JourneySession } | { ok: false; error: string; alreadyDelivered: boolean };
 
 export interface Activity {
   lectureId: string | null;
@@ -78,6 +88,18 @@ export interface StudyDeps {
 }
 
 const NOT_HANDED = 'Couldn’t hand it to the course app — is it still running? Try again.';
+/** signOff refused: the session the card shows was sent or discarded in another window of the app */
+export const SESSION_ENDED_ELSEWHERE = 'This session already ended in another window — nothing was sent from here.';
+
+/** A stored session, or undefined when the value is not one (hand-edited, half-written). */
+function parseSession(raw: string): StudySession | undefined {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isStudySession(parsed) ? parsed : undefined;
+  } catch {
+    return undefined; // not JSON: the caller reports it
+  }
+}
 
 export class StudyController {
   private state: StudyState = { session: null, notice: null };
@@ -91,6 +113,12 @@ export class StudyController {
   private readonly carry = new Map<number, number>();
   private readonly ticker: StudyTicker;
   private readonly listeners = new Set<() => void>();
+  /** the key's value as this window last read or wrote it; undefined = not read yet. Another window
+   *  changed the session when the key no longer holds it (adopt). */
+  private lastRaw: string | null | undefined = undefined;
+  /** false while this window's last write of the session failed (full / blocked storage): the key then
+   *  holds an older value, and adopting it would drop the running session */
+  private persisted = true;
   private readonly key: string;
   private readonly now: () => number;
   private readonly perf: () => number;
@@ -116,22 +144,29 @@ export class StudyController {
 
   /** App open: the running session, if any — it kept running while the app was closed. */
   resume(): void {
-    const raw = readString(this.deps.storage, this.key);
-    const session = readJson(this.deps.storage, this.key, isStudySession);
-    if (raw !== null && session === null) console.warn(`[study] ${this.key}: unreadable study session — ignored`);
-    this.set({ ...this.state, session });
+    this.adopt();
   }
 
-  /** Starts the 1 s ticker and the input listeners; returns the cleanup. */
+  /** Starts the 1 s ticker, the input listeners and the other-window sync; returns the cleanup. */
   start(): () => void {
     this.resume();
     const onInput = (): void => this.noteInput();
     const events = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'scroll', 'touchstart'] as const;
     for (const e of events) window.addEventListener(e, onInput, { passive: true, capture: true });
+    // `storage` fires in every OTHER window of this origin when one changes the key (null key = clear());
+    // focus re-reads too, for a window that missed it (e.g. it was frozen in the background)
+    const onStorage = (e: StorageEvent): void => {
+      if (e.key === this.key || e.key === null) this.adopt();
+    };
+    const onFocus = (): void => this.adopt();
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('focus', onFocus);
     const timer = window.setInterval(() => this.tick(), 1000);
     return () => {
       window.clearInterval(timer);
       for (const e of events) window.removeEventListener(e, onInput, { capture: true });
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('focus', onFocus);
       this.flushSectionTime();
     };
   }
@@ -157,8 +192,9 @@ export class StudyController {
     if (++this.ticks % SECTION_FLUSH_TICKS === 0) this.flushSectionTime();
   }
 
-  /** "Start studying" (home + header). A running session is left as it is. */
+  /** "Start studying" (home + header). A running session — this window's or another's — is left as it is. */
   startSession(): void {
+    this.adopt();
     if (this.state.session !== null) return;
     this.carry.clear();
     this.set({ ...this.state, session: newSession(this.newId(), this.now(), false) });
@@ -166,6 +202,7 @@ export class StudyController {
 
   /** A lecture was played / opened with no session running: start one, and say so quietly (header). */
   autoStart(): void {
+    this.adopt();
     if (this.state.session !== null) return;
     this.carry.clear();
     const now = this.now();
@@ -176,6 +213,7 @@ export class StudyController {
   setDone(lectureId: string, done: boolean): void {
     this.deps.progress.update((s, now) => withDone(s, lectureId, done, now));
     const ref = this.deps.index.byId.get(lectureId);
+    this.adopt();
     const s = this.state.session;
     if (s === null || !ref) return;
     const { section, lecture } = ref;
@@ -190,24 +228,27 @@ export class StudyController {
   }
 
   /**
-   * Send to Rahul. Her minutes (never above the timer — the card caps it too) are credited to the days
-   * the session spanned, and the update carries that progress. The timer stops only once the local
-   * outbox has the update: a failed hand-over keeps the session (and credits nothing), so she can retry.
+   * Send to Rahul — `sessionId` = the session the card shows. Her minutes (never above the timer — the
+   * card caps it too) are credited to the days the session spanned, and the update carries that progress.
+   * The timer stops only once the local outbox has the update: a failed hand-over keeps the session (and
+   * credits nothing), so she can retry. A session that ended in another window (the key no longer holds
+   * it) is refused, never sent again: see the header.
    */
-  async signOff(answer: SignOffAnswer): Promise<HandOver> {
-    this.flushSectionTime();
+  async signOff(sessionId: string, answer: SignOffAnswer): Promise<HandOver> {
+    this.flushSectionTime(); // adopts first
     const s = this.state.session;
-    if (s === null) return { ok: false, error: 'The study timer isn’t running.' };
+    if (s === null || s.id !== sessionId) return { ok: false, error: SESSION_ENDED_ELSEWHERE, alreadyDelivered: false };
     const now = this.now();
     const minutes = Math.min(Math.max(0, Math.floor(answer.minutes)), sendableMinutes(s, now));
-    if (!canSend(minutes, answer.note)) return { ok: false, error: 'Add the time you studied, or a note.' };
+    if (!canSend(minutes, answer.note)) return { ok: false, error: 'Add the time you studied, or a note.', alreadyDelivered: false };
     const credit = splitAcrossDays(s.startedAt, now, minutes * 60);
     const update = this.build(s, { ...answer, minutes }, now, withStudyDays(this.deps.progress.get(), credit, now));
-    if (update === null) return { ok: false, error: 'Add the time you studied, or a note.' };
+    if (update === null) return { ok: false, error: 'Add the time you studied, or a note.', alreadyDelivered: false };
     const handed = await this.handOver(update);
+    this.adopt(); // another window may have ended it, or started a new one, during the POST
     if (!handed.ok) return handed;
     this.deps.progress.update((p, t) => withStudyDays(p, credit, t));
-    // a session started meanwhile (another tab) is not this one: only clear what was sent
+    // a session started meanwhile in another window is not this one: only clear what was sent
     if (this.state.session?.id === s.id) {
       this.carry.clear();
       this.set({ ...this.state, session: null });
@@ -218,7 +259,7 @@ export class StudyController {
   /** "Note to Rahul…": a note-only update (no time, note required). A running timer is left alone. */
   async sendNote(answer: SignOffAnswer): Promise<HandOver> {
     const update = this.build(null, { ...answer, minutes: 0 }, this.now(), undefined);
-    if (update === null) return { ok: false, error: 'Write a note for Rahul.' };
+    if (update === null) return { ok: false, error: 'Write a note for Rahul.', alreadyDelivered: false };
     return this.handOver(update);
   }
 
@@ -228,9 +269,11 @@ export class StudyController {
     return this.handOver(update);
   }
 
-  /** An accidental session: gone, nothing sent, no study time credited. */
-  discard(): void {
-    if (this.state.session === null) return;
+  /** An accidental session (`sessionId`, the one the card shows): gone, nothing sent, no study time
+   *  credited. A session started in another window since is left alone. */
+  discard(sessionId: string): void {
+    this.adopt();
+    if (this.state.session?.id !== sessionId) return;
     this.carry.clear();
     this.set({ ...this.state, session: null });
   }
@@ -263,6 +306,9 @@ export class StudyController {
         continue;
       }
       const handed = await this.handOver(legacyUpdate(s, { courseId: this.deps.courseId, progress: snapshot, fallbackSection }));
+      // already with Rahul (an earlier run delivered it; this run's body differs — e.g. its fallback
+      // section moved): done. Stopping here would strand every v2 session after it.
+      if (!handed.ok && handed.alreadyDelivered) continue;
       if (!handed.ok) return sent; // keys kept: the next open sends them again
       sent++;
     }
@@ -288,7 +334,10 @@ export class StudyController {
       return { ok: true, update };
     } catch (err) {
       console.error(`[study] ${this.deps.profile}: could not hand update ${update.id} to the course server`, err);
-      return { ok: false, error: NOT_HANDED };
+      // 409 = it took the request and refused it for a reason in her words (server/journey.ts enqueue:
+      // a changed copy of an update JS Journey already has) — "is it still running?" would be wrong
+      const already = err instanceof ApiError && err.status === 409;
+      return { ok: false, error: already ? err.message : NOT_HANDED, alreadyDelivered: already };
     }
   }
 
@@ -301,6 +350,7 @@ export class StudyController {
   }
 
   private flushSectionTime(): void {
+    this.adopt();
     const s = this.state.session;
     if (this.carry.size === 0 || s === null) return;
     let next = s;
@@ -309,15 +359,48 @@ export class StudyController {
     this.set({ ...this.state, session: next });
   }
 
+  /**
+   * Takes the session as the key holds it NOW (see the header): another window may have sent, discarded,
+   * started or changed it since this one last looked. Never writes. Every action calls it before it reads
+   * this.state.session, so what it then writes is built on the current session, never on a stale copy.
+   */
+  private adopt(): void {
+    const store = this.deps.storage;
+    if (store === null || !this.persisted) return; // memory only: no other window can see this session
+    let raw: string | null;
+    try {
+      raw = store.getItem(this.key);
+    } catch (err) {
+      // unreadable is not "gone": keep this window's session rather than drop a running timer
+      console.warn(`[study] ${this.key}: could not read the study session — keeping this window's`, err);
+      return;
+    }
+    if (raw === this.lastRaw) return;
+    this.lastRaw = raw;
+    const session = raw === null ? null : parseSession(raw);
+    if (session === undefined) {
+      console.warn(`[study] ${this.key}: unreadable study session — ignored`);
+      return;
+    }
+    // player time measured for a session that ended elsewhere belongs to no session
+    if (session?.id !== this.state.session?.id) this.carry.clear();
+    this.state = { ...this.state, session };
+    for (const cb of this.listeners) cb();
+  }
+
   private set(next: StudyState): void {
     const prev = this.state;
     if (next.session === prev.session && next.notice === prev.notice) return;
     this.state = next;
-    if (next.session !== prev.session) {
-      if (next.session === null) writeString(this.deps.storage, this.key, null);
-      else writeJson(this.deps.storage, this.key, next.session);
-    }
+    if (next.session !== prev.session) this.save(next.session);
     for (const cb of this.listeners) cb();
+  }
+
+  private save(session: StudySession | null): void {
+    if (this.deps.storage === null) return;
+    const raw = session === null ? null : JSON.stringify(session);
+    this.persisted = writeString(this.deps.storage, this.key, raw);
+    if (this.persisted) this.lastRaw = raw;
   }
 }
 

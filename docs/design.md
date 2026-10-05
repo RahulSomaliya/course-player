@@ -144,7 +144,7 @@ study-timer chip and its dot, plan marks, progress) — screenshots catch them m
   "SECTION 07", title, due date, ‹ › to step sections, lectures, and "Next: §08 …" at the bottom.
   `T` = theatre.
 - **Sign-off card** — a dialog (max 512 px): "Nice work, Mansi" + "Timer: 1h 23m · started 9:14";
-  Time studied (h + m fields, prefilled, ≤ the timer, inline reason in `ink`); what the session recorded
+  Time studied (h + m fields, prefilled unless the timer ran over 24 h, ≤ the timer, inline reason in `ink`); what the session recorded
   on a `sunken` panel (lectures · section, up to 5 ✓ titles, "+N more"); the note (optional), 4 moods,
   "I'm stuck"; a quiet "Discard" (confirmed in place) left, ONE primary "Send to Rahul" / "Send & quit"
   right. After Send a confirmation in place: solid accent ✓ disc + "Sent to Rahul" (delivered) or a soft

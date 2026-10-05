@@ -52,13 +52,16 @@ export function readString(store: KeyValueStore | null, key: string): string | n
   }
 }
 
-export function writeString(store: KeyValueStore | null, key: string, value: string | null): void {
-  if (store === null) return;
+/** true = written (or removed); false = no storage, or the write threw (logged). */
+export function writeString(store: KeyValueStore | null, key: string, value: string | null): boolean {
+  if (store === null) return false;
   try {
     if (value === null) store.removeItem(key);
     else store.setItem(key, value);
+    return true;
   } catch (err) {
     console.warn(`[storage] could not write ${key}`, err);
+    return false;
   }
 }
 

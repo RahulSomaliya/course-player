@@ -113,6 +113,8 @@ v3 makes both impossible and gives her a real receipt.
 - Top: "Timer: 1h 23m · started 9:14" (and the date if not today). Then **Time studied** — hours +
   minutes inputs prefilled with the timer (rounded down to the minute, capped at 24 h), max = timer;
   validation inline (never above the timer; a timer over 24 h says "longer than a day — set the real time").
+  Review 2026-10-05: a timer over 24 h prefills NOTHING and Send waits until she types her real time — a
+  prefilled "24h 0m" let one tap credit a whole day she never studied.
 - Lectures completed (compact, "+N more" past 5), section — as in v2.
 - Note (optional; placeholder as v2), 4 moods, "I'm stuck".
 - **One primary button: "Send to Rahul"** ("Send & quit" when quitting). Disabled only when there is

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { JourneySession } from '../../../shared/types';
 import { newSession, type StudySession } from './session';
-import { describeSession, parseTime, sentDetail, timeProblem } from './signoff';
+import { OVER_DAY, describeSession, parseTime, prefillTime, sentDetail, timeProblem } from './signoff';
 import { sampleCourse } from './test-fixtures';
 
 const c = sampleCourse(); // §01 Welcome · §02 Part 1 intro · §03 Components
@@ -52,6 +52,16 @@ describe('the Time studied fields (hours + minutes, max = the timer, ≤ 24 h)',
     expect(timeProblem(84, 83)).toBe('That’s more than the timer (1h 23m).');
     expect(timeProblem(1441, 2000)).toBe('At most 24h in one update.');
     expect(timeProblem(null, 83)).toBe('Use whole hours and minutes.');
+  });
+
+  // Review 2026-10-05: "24h 0m" prefilled for a timer left running over a weekend — one tap credited a day.
+  it('prefillTime: the timer, rounded down — EMPTY for a timer over 24 h, and Send waits for her real time', () => {
+    expect(prefillTime(session(), START + 83 * 60_000 + 59_000)).toEqual({ hours: '1', minutes: '23' });
+    expect(prefillTime(session(), START + 24 * 3_600_000)).toEqual({ hours: '24', minutes: '0' }); // exactly a day is not over
+    expect(prefillTime(session(), START + 63 * 3_600_000)).toEqual({ hours: '', minutes: '' });
+    expect(OVER_DAY).toBe('The timer ran longer than a day — set the real time.');
+    expect(timeProblem(0, 3780, true)).toBe(OVER_DAY); // untouched: whatever the fields read
+    expect(timeProblem(60, 3780)).toBeNull(); // once she typed it
   });
 });
 

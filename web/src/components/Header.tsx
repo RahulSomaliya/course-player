@@ -100,7 +100,16 @@ function Menu() {
 
   return (
     <div className="relative">
-      <IconButton ref={trigger} label="Settings — theme and JS Journey" size="sm" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-haspopup="true">
+      {/* data-control: the sign-off card's "Note to Rahul…" returns focus here (its menu item is gone) */}
+      <IconButton
+        ref={trigger}
+        label="Settings — theme and JS Journey"
+        size="sm"
+        data-control="settings-menu"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="true"
+      >
         <Settings2 className="size-4" strokeWidth={1.5} />
       </IconButton>
       {open && (

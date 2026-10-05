@@ -12,7 +12,7 @@ import type { KeyValueStore } from '../lib/storage';
 import { sampleCourse } from '../lib/test-fixtures';
 import { JourneyContext, JourneyStore } from '../state/journey';
 import { ProgressStore } from '../state/progress';
-import { StudyContext, StudyController, studyKey } from '../state/study';
+import { SESSION_ENDED_ELSEWHERE, StudyContext, StudyController, studyKey } from '../state/study';
 import { SignOffCard, type SignOffOutcome } from './SignOffCard';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -51,13 +51,17 @@ const outboxWith = (id: string, a: Answer, session: JourneySession): OutboxState
   return { pending: a.state === 'queued' ? 1 : 0, lastError: null, updates: [u] };
 };
 
+const KEY = studyKey(course.id, 'mansi');
+
 /**
- * A card on a session started 83 min ago (or none). `post` = what the course server does with the POST
- * (resolve = 202 at once by default); `delivery` = what GET outbox?wait= answers for the update.
+ * A card on a session started 83 min ago (or `startedAgoMs`; or none). `post` = what the course server
+ * does with the POST (resolve = 202 at once by default); `delivery` = what GET outbox?wait= answers.
  */
-function mount(opts: { mode?: 'session' | 'note'; quitting?: boolean; running?: boolean; connected?: boolean; post?: 'ok' | 'hold' | 'fail'; delivery?: Answer | 'hold' } = {}) {
+function mount(
+  opts: { mode?: 'session' | 'note'; quitting?: boolean; running?: boolean; startedAgoMs?: number; connected?: boolean; post?: 'ok' | 'hold' | 'fail'; delivery?: Answer | 'hold' } = {},
+) {
   const data = new Map<string, string>();
-  if (opts.running ?? true) data.set(studyKey(course.id, 'mansi'), JSON.stringify(newSession('live-1', Date.now() - 83 * 60_000 - 5_000, false)));
+  if (opts.running ?? true) data.set(KEY, JSON.stringify(newSession('live-1', Date.now() - (opts.startedAgoMs ?? 83 * 60_000 + 5_000), false)));
   const storage: KeyValueStore = { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => void data.set(k, v), removeItem: (k) => void data.delete(k) };
   const sent: JourneySession[] = [];
   let releasePost: () => void = () => undefined;
@@ -112,6 +116,8 @@ function mount(opts: { mode?: 'session' | 'note'; quitting?: boolean; running?: 
   return {
     study,
     progress,
+    /** the browser's localStorage, shared with "another window" of the app */
+    data,
     sent,
     outcomes,
     releasePost: () => releasePost(),
@@ -176,6 +182,21 @@ describe('SignOffCard: what she sees before Send (spec v3 A5)', () => {
     expect(text('[data-signoff="reason"]')).toBe('Add the time you studied, or a note.');
     type(note(), 'read about keys');
     expect(primary().disabled).toBe(false);
+  });
+
+  // Review 2026-10-05: v3 has no 24 h auto-close, so a timer left running over a weekend is normal. The
+  // card prefilled "24h 0m" and one tap sent and credited a whole day she never studied.
+  it('a forgotten timer (over 24 h) prefills nothing: Send waits until she sets her real time', async () => {
+    const card = mount({ startedAgoMs: 63 * 3_600_000 });
+    expect([field('Hours').value, field('Minutes').value]).toEqual(['', '']);
+    expect(primary().disabled).toBe(true);
+    expect(text('[data-signoff="reason"]')).toBe('The timer ran longer than a day — set the real time.');
+    type(note(), 'a weekend away');
+    expect(primary().disabled).toBe(true); // a note does not answer the question: how long?
+    type(field('Hours'), '1');
+    expect(primary().disabled).toBe(false);
+    await act(async () => primary().click());
+    expect(card.sent[0]).toMatchObject({ id: 'live-1', minutes: 60, note: 'a weekend away' });
   });
 
   it('Note to Rahul…: no timer, no time fields; the note is required', () => {
@@ -335,5 +356,79 @@ describe('SignOffCard: not now, discard, quit', () => {
     await act(async () => card.releasePost());
     await wait(300);
     expect(card.outcomes).toEqual([]);
+  });
+});
+
+// Review 2026-10-05: a 2nd window of the app sent the session; this one still showed it, and Send posted
+// the same id again — JS Journey ignored it as a duplicate while this card said "Sent ✓ · note included".
+describe('SignOffCard: the session ended in another window', () => {
+  it('while the card is open: it says so at once, and her note can still go — as a Note to Rahul', async () => {
+    const card = mount();
+    const stop = card.study.start();
+    type(note(), 'second note');
+    act(() => {
+      card.data.delete(KEY); // the other window sent it
+      window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue: null }));
+    });
+    expect(text('[data-signoff="error"]')).toBe(SESSION_ENDED_ELSEWHERE);
+    expect(document.querySelector('input[aria-label="Hours"]')).toBeNull();
+    expect(document.querySelector('[data-control="signoff-discard"]')).toBeNull();
+    expect(note().value).toBe('second note');
+    await act(async () => primary().click());
+    expect(card.sent).toMatchObject([{ minutes: 0, note: 'second note' }]);
+    expect(card.sent[0]?.id).not.toBe('live-1');
+    stop();
+  });
+
+  it('a new session started there meanwhile is not this card\'s: it never sends that one either', async () => {
+    const card = mount();
+    type(note(), 'second note');
+    act(() => card.data.set(KEY, JSON.stringify(newSession('other-2', Date.now(), false))));
+    await act(async () => primary().click()); // no storage event yet: Send itself re-reads the key
+    expect(card.sent).toEqual([]);
+    expect(text('[data-signoff="error"]')).toBe(SESSION_ENDED_ELSEWHERE);
+    expect(note().value).toBe('second note');
+    expect(card.study.getState().session?.id).toBe('other-2');
+  });
+});
+
+// Review 2026-10-05: the Dialog put focus back on the element focused when it opened — after Send or
+// Discard that is the timer chip, which the header has swapped for "Start studying" (and the menu item
+// behind "Note to Rahul…" is gone with its menu): focus fell to <body> and Tab restarted at the page top.
+describe('SignOffCard: where keyboard focus goes when it closes', () => {
+  const headerButton = (control: string): HTMLButtonElement => {
+    const b = document.createElement('button');
+    b.dataset.control = control;
+    document.body.append(b);
+    return b;
+  };
+
+  it('after Send the chip is gone: Start studying (the header timer slot), never <body>', async () => {
+    const chip = headerButton('sign-off');
+    chip.focus();
+    mount();
+    await act(async () => primary().click());
+    chip.remove(); // the header swapped the chip for Start studying when the timer stopped
+    const start = headerButton('start-studying');
+    act(() => button('Done').click());
+    await wait(250);
+    expect(document.activeElement).toBe(start);
+  });
+
+  it('a note card opened from the menu (its item gone with the menu): back to the menu button', async () => {
+    const menu = headerButton('settings-menu');
+    mount({ mode: 'note', running: false });
+    act(() => button('Not now').click());
+    await wait(250);
+    expect(document.activeElement).toBe(menu);
+  });
+
+  it('the element focused at open still there (× = not now): focus goes back to it', async () => {
+    const quit = headerButton('quit');
+    quit.focus();
+    mount({ quitting: true });
+    act(() => button('Not now — keep studying').click());
+    await wait(250);
+    expect(document.activeElement).toBe(quit);
   });
 });

@@ -178,6 +178,9 @@ export function toUpdate(s: StudySession | null, o: UpdateOptions): JourneySessi
     course: o.courseId,
     startedAt: new Date(startedAt).toISOString(),
     endedAt: new Date(Math.max(o.now, startedAt)).toISOString(),
+    // The start day — and splitAcrossDays spreads her minutes over every day the timer spanned (spec A3).
+    // A timer left running for days files under its first day and credits days she did not study
+    // (review 2026-10-05): open question for Rahul; change both together.
     studyDate: localDateKey(new Date(startedAt)),
     minutes,
     sectionNumber: (s === null ? 0 : mainSection(s)) || o.fallbackSection,

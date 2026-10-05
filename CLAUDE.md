@@ -64,6 +64,14 @@ the JS Journey token. Clients get a status code + short message. Web shows calm 
   split over the days it spanned; the ticker (`lib/ticker.ts`) only picks the section — writing days there
   again double-counts. The timer stops only after the outbox's 202 (`StudyController.signOff`); a failed
   hand-over keeps the session and credits nothing.
+- The study session key (`cp:<course>:<profile>:study`) is the ONE truth for every window of the app
+  (2026-10-05 review): a 2nd launcher double-click opens a 2nd tab, each tab read the key once, and the
+  stale tab re-sent a sent session — JS Journey answered "duplicate" (stored nothing) while the card said
+  "Sent ✓ · note included". `StudyController` re-reads the key before every action (`adopt`), follows
+  `storage` + `focus`, never writes over a session that ended elsewhere; `signOff`/`discard` take the id
+  the card shows. The server refuses a CHANGED copy of a delivered id (409 `AlreadyDelivered`,
+  `server/journey.ts` `updateSig`). `ProgressStore` has no such sync: two windows still overwrite each
+  other's progress (last write wins).
 - A component whose async action can outlive it must not schedule after unmount (the effect cleanup
   only clears timers that exist then) and must fire once-only callbacks once: the sign-off card's late
   timer reported a 2nd, completed outcome and App quit after "keep studying" (`SignOffCard.tsx`). The

@@ -1,6 +1,7 @@
 // The sign-off card = one update for Rahul (docs/spec-v3-study-timer.md A5). Two kinds:
 // - 'session' (the header chip / Quit): "Timer: 1h 23m · started 9:14", Time studied (hours + minutes,
-//   prefilled from the timer, never above it, ≤ 24 h), what the session recorded, note, mood, "I'm stuck";
+//   prefilled from the timer unless it ran over 24 h, never above it, ≤ 24 h), what the session recorded,
+//   note, mood, "I'm stuck";
 // - 'note' (menu "Note to Rahul…"): a note-only update — no time, note required; a running timer goes on.
 // ONE primary button, "Send to Rahul" ("Send & quit" from Quit), disabled only when there is nothing to
 // send — with the reason shown.
@@ -12,6 +13,14 @@
 // 650 ms on a 202 while JS Journey refused the update and the outbox dropped it — so: no sub-second flash,
 // and no success word before a delivered receipt. The timer stops the moment the outbox has the update
 // (StudyController.signOff), before delivery settles.
+//
+// A timer over 24 h (a forgotten one) prefills nothing: Send waits until she types her real time
+// (lib/signoff.ts prefillTime — a prefilled "24h 0m" once credited a day she never studied).
+//
+// The card belongs to the session it opened on (`openedOn`). If that one ends in another window of the
+// app (sent / discarded there — state/study.ts header), the card says so and turns into a note form that
+// keeps her words: it never follows a session started there since, and never sends this one again
+// (review 2026-10-05: the stale tab re-sent it, JS Journey ignored the duplicate, the card said "Sent ✓").
 //
 // × / Escape / the scrim = "not now": the session keeps running (and a Quit is cancelled). Not while the
 // POST is in flight: closing then let a send finish behind an unmounted card whose leftover timer
@@ -27,14 +36,19 @@ import { useApp } from '../app/context';
 import { formatDuration, plural } from '../lib/format';
 import { prefersReducedMotion } from '../lib/motion';
 import { readableReason, type Delivery } from '../lib/outbox';
-import { MOODS, canSend, cleanNote, sendableMinutes, timerMinutes, type Mood, type StudySession } from '../lib/session';
-import { describeSession, parseTime, sentDetail, timeProblem } from '../lib/signoff';
+import { MOODS, canSend, cleanNote, timerMinutes, type Mood, type StudySession } from '../lib/session';
+import { describeSession, parseTime, prefillTime, sentDetail, timeProblem } from '../lib/signoff';
 import { useJourneyStore } from '../state/journey';
-import { useNow, useStudy, useStudyState, type HandOver } from '../state/study';
+import { SESSION_ENDED_ELSEWHERE, useNow, useStudy, useStudyState, type HandOver } from '../state/study';
 
 const MOOD_LABELS: Record<Mood, string> = { '😄': 'Great', '🙂': 'Good', '😐': 'Okay', '😩': 'Tough' };
 /** = --animate-leave (index.css) */
 const LEAVE_MS = 180;
+
+/** Focus on close when what opened the card is gone (components/Dialog.tsx): the header's timer slot —
+ *  the chip, or "Start studying" once Send / Discard stopped it — or, for a note, the menu it came from. */
+const focusAfter = (mode: Props['mode']) => (): HTMLElement | null =>
+  document.querySelector<HTMLElement>(mode === 'note' ? '[data-control="settings-menu"]' : '[data-control="sign-off"], [data-control="start-studying"]');
 
 export interface SignOffOutcome {
   /** updates handed to the outbox (0 or 1) — App refreshes the feed and pushes the snapshot then */
@@ -57,6 +71,8 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
   const study = useStudy();
   const journey = useJourneyStore();
   const { session } = useStudyState();
+  /** the session this card is for — never one started in another window while it is open */
+  const [openedOn] = useState(() => (mode === 'session' ? (session?.id ?? null) : null));
   const [phase, setPhase] = useState<Phase>('form');
   const [note, setNote] = useState('');
   const [mood, setMood] = useState<Mood | null>(null);
@@ -93,18 +109,21 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
     if (phase === 'done') doneButton.current?.focus();
   }, [phase]);
 
-  const view = frozen?.session ?? (mode === 'session' ? session : null);
+  const view = frozen?.session ?? (session !== null && session.id === openedOn ? session : null);
   const isSession = view !== null;
+  /** its session ended in another window before she sent it here: a note form now, saying why */
+  const endedElsewhere = openedOn !== null && view === null && handed === null;
   const now = useNow(isSession && frozen === null);
   const at = frozen?.at ?? now;
   const summary = view === null ? null : describeSession(view, course, at);
   const max = view === null ? 0 : timerMinutes(view, at);
-  const prefill = view === null ? 0 : sendableMinutes(view, at);
-  const hours = typed?.hours ?? String(Math.floor(prefill / 60));
-  const minutes = typed?.minutes ?? String(prefill % 60);
+  const prefill = view === null ? { hours: '0', minutes: '0' } : prefillTime(view, at);
+  const hours = typed?.hours ?? prefill.hours;
+  const minutes = typed?.minutes ?? prefill.minutes;
   const total = parseTime(hours, minutes);
-  const problem = isSession && handed === null ? timeProblem(total, max) : null;
+  const problem = isSession && handed === null ? timeProblem(total, max, summary?.overDay === true && typed === null) : null;
   const sendable = isSession ? problem === null && canSend(handed?.minutes ?? total ?? 0, note) : cleanNote(note) !== null;
+  const shownError = error ?? (endedElsewhere ? SESSION_ENDED_ELSEWHERE : null);
   const reason = problem ?? (sendable ? null : isSession ? 'Add the time you studied, or a note.' : 'Write a note for Rahul.');
   const busy = phase === 'sending' || phase === 'leaving';
   const lectureCount = summary === null ? 0 : summary.lectures.shown.length + summary.lectures.more;
@@ -138,7 +157,7 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
       handOver = await study.resend({ ...handed, mood, note: cleanNote(note), stuck });
     } else if (view !== null) {
       setFrozen({ session: view, at: Date.now() });
-      handOver = await study.signOff(answer);
+      handOver = await study.signOff(view.id, answer);
     } else {
       handOver = await study.sendNote(answer);
     }
@@ -172,7 +191,15 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
   if (phase === 'done' || (phase === 'leaving' && result !== null)) {
     const delivered = result === 'delivered';
     return (
-      <Dialog open onClose={() => close(false)} labelledBy={titleId} enter="rise" leaving={phase === 'leaving'} className="max-h-[calc(100dvh-2rem)] max-w-lg overflow-y-auto">
+      <Dialog
+        open
+        onClose={() => close(false)}
+        labelledBy={titleId}
+        enter="rise"
+        leaving={phase === 'leaving'}
+        returnFocus={focusAfter(mode)}
+        className="max-h-[calc(100dvh-2rem)] max-w-lg overflow-y-auto"
+      >
         <div data-signoff-result={delivered ? 'delivered' : 'saved'} role="status" className="animate-arrive p-6">
           <div className="flex items-start gap-4">
             <span
@@ -205,7 +232,7 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
   }
 
   const primaryLabel = phase === 'sending' ? 'Sending…' : handed !== null ? 'Try again' : quitting ? 'Send & quit' : 'Send to Rahul';
-  const quietQuit = quitting ? (handed === null ? 'Quit, keep timer' : 'Quit anyway') : null;
+  const quietQuit = quitting ? (handed !== null ? 'Quit anyway' : isSession ? 'Quit, keep timer' : 'Quit') : null;
   const timerLocked = busy || handed !== null;
 
   return (
@@ -215,6 +242,7 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
       labelledBy={titleId}
       enter="rise"
       leaving={phase === 'leaving'}
+      returnFocus={focusAfter(mode)}
       className="max-h-[calc(100dvh-2rem)] max-w-lg overflow-y-auto"
     >
       <div data-signoff={isSession ? 'session' : 'note'} className="p-6">
@@ -334,14 +362,14 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
           <span className="text-sm text-ink-muted">flags this update for Rahul</span>
         </div>
 
-        {error && (
+        {shownError && (
           <p role="alert" data-signoff="error" className="mt-5 text-sm text-ink">
-            {error}
+            {shownError}
           </p>
         )}
 
         <div className="mt-6 flex flex-wrap items-center justify-end gap-x-2 gap-y-3">
-          {isSession && handed === null && (
+          {view !== null && handed === null && (
             <div className="mr-auto flex min-h-10 items-center gap-1 text-sm">
               {discarding ? (
                 <>
@@ -352,7 +380,7 @@ export function SignOffCard({ mode, quitting, onDone }: Props) {
                     data-control="signoff-discard-confirm"
                     className="text-ink"
                     onClick={() => {
-                      study.discard();
+                      study.discard(view.id);
                       close(false);
                     }}
                   >
