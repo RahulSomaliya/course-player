@@ -16,13 +16,16 @@ Spec: `docs/spec.md` + `docs/spec-v2-coaching.md` + `docs/spec-v3-study-timer.md
 1. Plug in the SSD. In Finder open `Rahul's SSD → Courses → Coding FE → React 2023`.
 2. Double-click `🟢 Open React Course.command`. The course opens in the browser at
    `http://localhost:8795`. (If macOS ever refuses: right-click it → Open → Open.)
-3. Click the menu icon next to **Sign off** → **Connect JS Journey…** → paste her link
+3. Click the settings icon (top right, next to **Start studying**) → **Connect JS Journey…** → paste her link
    `https://js-journey-ten.vercel.app/m/<STUDENT_TOKEN>` (`STUDENT_TOKEN` is in the same `.env.local`).
    It shows **Connected**. This is saved on the SSD, so it works on any Mac.
 4. Optional: send her the same `/m/…` link for her phone.
 
 ## Every day
-- **Mansi:** open the app → read Rahul's feedback (Got it) → study → **Sign off** with a note → Quit.
+- **Mansi:** open the app → read Rahul's feedback (Got it) → **Start studying** (or just play a lecture —
+  the timer starts itself) → when done, the timer in the header → **Sign off** → set the real time, a note →
+  **Send to Rahul** → wait for "Sent to Rahul ✓" (or "Saved ✓" when offline) → Quit. Studied away from the
+  player? Settings menu → **Note to Rahul…**.
 - **Rahul:** open the `/r/…` link → read her unread updates → reply.
 
 ## Update the app on the SSD
