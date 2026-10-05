@@ -1,0 +1,234 @@
+{
+ "title": "Study Timer QA",
+ "subtitle": "Course Player v3 in headless Chrome against the SSD course and a stand-in JS Journey, plus the JS Journey pages rendered from test data.",
+ "meta": {
+  "App build": "0.1.0 · study-timer bc17c7e (JS Journey eed0e3e) (web built 5 Oct 15:48)",
+  "Tests": "458 app · 346 JS Journey",
+  "Checks": "138/138 passed",
+  "Date": "5 Oct 2026"
+ },
+ "groups": [
+  {
+   "name": "Start studying",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/home-fresh-1440-light.png",
+     "caption": "First open, no session: \"Start studying\" sits in the header and next to Start in the hero",
+     "check": "pass",
+     "note": "3 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/home-fresh-390-dark.png",
+     "caption": "Same at phone width, dark: both buttons fit, no sideways scroll",
+     "check": "pass",
+     "note": "4 checks"
+    }
+   ]
+  },
+  {
+   "name": "The running timer",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/chip-1h23m-1440-light.png",
+     "caption": "Timer running for 83 minutes: the header chip reads \"● 1h 23m\"",
+     "check": "pass",
+     "note": "2 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/chip-hover-1440-light.png",
+     "caption": "Hover: the same chip reads \"Sign off\" — same box, the title, menu and Quit do not move",
+     "check": "pass",
+     "note": "3 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/chip-focus-1440-dark.png",
+     "caption": "Keyboard: Tab to the chip and it reads \"Sign off\" too (dark)",
+     "check": "pass",
+     "note": "2 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/chip-390-dark.png",
+     "caption": "The running chip at phone width, dark",
+     "check": "pass",
+     "note": "3 checks"
+    }
+   ]
+  },
+  {
+   "name": "Sign off and Send",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/card-over-timer-1440-light.png",
+     "caption": "Sign-off card: the timer, editable time; 1h 40m is more than the timer → inline error, Send held; one Send button",
+     "check": "pass",
+     "note": "4 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/card-over-timer-390-dark.png",
+     "caption": "The same card at phone width, dark",
+     "check": "pass",
+     "note": "3 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/sent-1440-dark.png",
+     "caption": "3 s after Send: \"Sent to Rahul ✓ · 1h 10m logged · note included\" is still there; the header is back to Start studying",
+     "check": "pass",
+     "note": "4 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/sent-390-light.png",
+     "caption": "The confirmation at phone width, light — it stays until Done",
+     "check": "pass",
+     "note": "2 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/quit-1440-dark.png",
+     "caption": "Quit while the timer runs: the sign-off card opens first, primary \"Send & quit\"",
+     "check": "pass",
+     "note": "3 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/over24-1440-light.png",
+     "caption": "A timer left running 26 h: nothing prefilled, \"set the real time\", Send waits",
+     "check": "pass",
+     "note": "4 checks"
+    }
+   ]
+  },
+  {
+   "name": "Never lost: offline and refused",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/offline-saved-1440-light.png",
+     "caption": "JS Journey unreachable: Send says \"Saved ✓ — it will reach Rahul as soon as you’re online\"",
+     "check": "pass",
+     "note": "3 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/offline-waiting-390-dark.png",
+     "caption": "Your updates (phone, dark): her update on top, \"Waiting to send\"; the feed says it is the offline copy",
+     "check": "pass",
+     "note": "4 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/offline-delivered-1440-light.png",
+     "caption": "Back online: the outbox delivered it by itself; the waiting row is gone and her update is in the feed",
+     "check": "pass",
+     "note": "3 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/rejected-card-1440-dark.png",
+     "caption": "JS Journey refuses it: the card stays, \"Didn’t reach Rahul — unknown course (HTTP 404)\", her note kept, Try again",
+     "check": "pass",
+     "note": "4 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/rejected-row-390-light.png",
+     "caption": "Closed after the refusal: Your updates keeps it — \"Didn’t reach Rahul — unknown course · Try again\" (phone, light)",
+     "check": "pass",
+     "note": "4 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/rejected-retried-1440-light.png",
+     "caption": "Try again after the fix: delivered — the refused row is gone and both updates are in the feed",
+     "check": "pass",
+     "note": "1 checks"
+    }
+   ]
+  },
+  {
+   "name": "Auto-start, plan, note, course id",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/autostart-1440-light.png",
+     "caption": "Playing a lecture with no session: the timer starts itself — \"Study timer started\" under the chip",
+     "check": "pass",
+     "note": "3 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/plan-1440-light.png",
+     "caption": "This week → \"See full plan\": every week with its goal and Friday, the Diwali break in place, this week marked",
+     "check": "pass",
+     "note": "4 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/plan-390-dark.png",
+     "caption": "The full plan at phone width, dark",
+     "check": "pass",
+     "note": "5 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/note-card-390-light.png",
+     "caption": "Settings → \"Note to Rahul…\": a note-only card, no time (phone, light)",
+     "check": "pass",
+     "note": "4 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/note-sent-1440-dark.png",
+     "caption": "The note is sent: \"Sent to Rahul ✓ · Note included\" (no time logged)",
+     "check": "pass",
+     "note": "2 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/unknown-course-1440-light.png",
+     "caption": "A copy whose course id JS Journey does not know: the menu says \"Course not recognised\" and why — not \"Connected\"",
+     "check": "pass",
+     "note": "4 checks · expected: 1 console line(s) for the deliberate 409"
+    }
+   ]
+  },
+  {
+   "name": "JS Journey: JS notes moved to the history",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/jj-m-home-1440-light.png",
+     "caption": "/m (her page): Your updates holds only React-era notes; the quiet \"JavaScript course history →\" link at the bottom",
+     "check": "pass",
+     "note": "4 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/jj-m-home-390-dark.png",
+     "caption": "/m (her page): Your updates holds only React-era notes; the quiet \"JavaScript course history →\" link at the bottom (phone, dark)",
+     "check": "pass",
+     "note": "3 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/jj-m-js-1440-light.png",
+     "caption": "/m?course=js: the JS course history — summary, her JS updates, Rahul’s JS notes among them, read-only",
+     "check": "pass",
+     "note": "2 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/jj-m-js-390-dark.png",
+     "caption": "/m?course=js: the JS course history — summary, her JS updates, Rahul’s JS notes among them, read-only (phone, dark)",
+     "check": "pass",
+     "note": "2 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/jj-r-home-1440-light.png",
+     "caption": "/r (coach page): his notes list holds only React-era notes",
+     "check": "pass",
+     "note": "2 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/jj-r-home-390-dark.png",
+     "caption": "/r (coach page): his notes list holds only React-era notes (phone, dark)",
+     "check": "pass",
+     "note": "2 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/jj-r-js-1440-light.png",
+     "caption": "/r?course=js: his JS-era notes among her JS updates",
+     "check": "pass",
+     "note": "2 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v3/jj-r-js-390-dark.png",
+     "caption": "/r?course=js: his JS-era notes among her JS updates (phone, dark)",
+     "check": "pass",
+     "note": "2 checks"
+    }
+   ]
+  }
+ ]
+}
