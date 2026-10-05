@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { JourneyFeed, JourneySession, JourneyStatus, PlanRow, ProgressSnapshot } from '../shared/types.ts';
 import { ConfigStore } from './config.ts';
 import {
+  AlreadyDelivered,
   Journey,
   isJourneyFeed,
   markRead,
@@ -893,6 +894,46 @@ describe('v3 outbox: every update reaches Rahul or stays visible', () => {
     expect(state.updates[0]).toMatchObject({ id: 's1', state: 'queued' });
     expect(state.updates[0]?.state === 'queued' && state.updates[0].session.note).toBe('edited');
     expect((await outboxOnDisk()).rejected).toEqual([]);
+  });
+
+  // Review 2026-10-05: JS Journey keeps ONE row per update id and answers a re-post with 200 "duplicate",
+  // storing nothing. A CHANGED copy of a delivered update (a 2nd window's sign-off of the same session; a
+  // card's "Try again" after a restart already delivered the old body) was queued and "delivered" — the
+  // card said "Sent to Rahul ✓ · note included" while her new note was dropped.
+  it('a changed copy of an update JS Journey already has is refused, never queued to be ignored; the same one again is a no-op', async () => {
+    reply = () => ({ status: 201, body: { status: 'created' } });
+    await journey.enqueue('mansi', session('s1', { note: 'first note' }));
+    await journey.settled('mansi');
+    // the same words again (a retried POST, a migration run twice) — its snapshot is newer, that is all
+    const again = await journey.enqueue('mansi', session('s1', { note: 'first note', progress: snapshot(Date.parse('2026-10-05T11:00:00.000Z')) }));
+    expect(again).toMatchObject({ pending: 0, updates: [{ id: 's1', state: 'delivered' }] });
+    const changed = journey.enqueue('mansi', session('s1', { note: 'second note', minutes: 77 }));
+    await expect(changed).rejects.toBeInstanceOf(AlreadyDelivered);
+    await expect(changed).rejects.toThrow('This update already reached Rahul — what you changed can’t be added to it. Send it as a Note to Rahul… instead.');
+    await journey.settled('mansi');
+    expect(seen.filter((r) => r.url === '/api/player/sessions')).toHaveLength(1);
+    expect(await outboxOnDisk()).toMatchObject({ items: [], rejected: [] });
+    expect(logged).toContain('[journey] mansi: session s1 already reached JS Journey — a changed copy was refused');
+  });
+
+  it('JS Journey answering "duplicate" is logged: it stored nothing from that body', async () => {
+    reply = () => ({ status: 200, body: { status: 'duplicate', id: 's1', progress: 'stale' } });
+    await journey.enqueue('mansi', session('s1'));
+    expect((await journey.settled('mansi')).updates).toMatchObject([{ id: 's1', state: 'delivered' }]);
+    expect(logged).toContain('[journey] mansi: session s1 was already on JS Journey (answered duplicate) — it kept the copy it had');
+  });
+
+  it('a "duplicate" answer keeps the receipt of the copy JS Journey has — a later post is judged against THAT one', async () => {
+    reply = () => ({ status: 201, body: { status: 'created' } });
+    await journey.enqueue('mansi', session('s1', { note: 'first note' }));
+    await journey.settled('mansi');
+    // a changed copy that got queued anyway (re-posted while the first was in flight), then delivered
+    const disk = await outboxOnDisk();
+    await writeFile(path.join(dir, 'outbox-mansi.json'), JSON.stringify({ ...disk, items: [session('s1', { note: 'second note' })] }));
+    reply = () => ({ status: 200, body: { status: 'duplicate', id: 's1' } });
+    await journey.flush('mansi');
+    await expect(journey.enqueue('mansi', session('s1', { note: 'second note' }))).rejects.toBeInstanceOf(AlreadyDelivered);
+    expect((await journey.enqueue('mansi', session('s1', { note: 'first note' }))).pending).toBe(0);
   });
 
   it('read receipts and snapshots are still dropped on 4xx (they carry no words of hers)', async () => {

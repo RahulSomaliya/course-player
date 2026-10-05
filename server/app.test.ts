@@ -315,6 +315,10 @@ describe('JS Journey routes', () => {
     expect(posted.json()).toMatchObject({ pending: 1, lastError: null } satisfies Partial<OutboxState>);
     expect(await app.journey.settled('mansi')).toMatchObject({ pending: 0, lastError: null });
     expect(stub.seen.at(-1)).toMatchObject({ method: 'POST', url: '/api/player/sessions', auth: `Bearer ${TOKEN}` });
+    // a changed copy of a delivered update: JS Journey would answer "duplicate" and drop it — 409, her words
+    const changed = await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody(session('s1', { note: 'second note' })));
+    expect(changed.status).toBe(409);
+    expect((changed.json() as { error: string }).error).toMatch(/^This update already reached Rahul/);
 
     const invalid = await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody({ ...session('s2'), minutes: 0 }));
     expect(invalid.status).toBe(400);

@@ -261,7 +261,10 @@ export interface JourneyFeed {
 //   POST /api/journey/:profile/sessions          body JourneySession -> 202 OutboxState (queued, retried).
 //                                                   v3: accepted while NOT connected too (delivered once
 //                                                   she connects); 400 only for a body JS Journey would
-//                                                   reject anyway
+//                                                   reject anyway; 409 { error } = a CHANGED copy of an
+//                                                   update already delivered (JS Journey would answer
+//                                                   "duplicate" and drop it) — `error` is hers to read.
+//                                                   The same update again = 202, a no-op
 //   GET  /api/journey/:profile/outbox?wait=<ms>  -> OutboxState. wait (0–10000, default 0) = answer once
 //                                                   the deliveries in flight have settled, or after <ms>:
 //                                                   POST an update, then GET ?wait=8000 tells delivered /

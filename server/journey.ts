@@ -19,7 +19,11 @@
 //   about one row, and must not stall "Got it" and the coach's stats behind it.
 // Retried on start-up, every 5 min, on each new queued item and on quit. JS Journey dedups sessions on id,
 // read receipts are idempotent and snapshots only win when newer, so re-sending after a lost response is
-// safe. Updates are accepted while NOT connected (v3): they wait here and go out once she connects. Every
+// safe. Dedup means JS Journey keeps the FIRST body of an id and answers a re-post 200 "duplicate",
+// storing nothing: a CHANGED copy of a delivered update (a 2nd window's sign-off of the same session) is
+// refused up front by enqueue() (AlreadyDelivered → 409) instead of being "delivered" and ignored — that
+// once showed "Sent to Rahul ✓ · note included" for a note Rahul never got (review 2026-10-05).
+// Updates are accepted while NOT connected (v3): they wait here and go out once she connects. Every
 // update and snapshot goes out under THIS copy's course id (opts.courseId), whatever it was queued with —
 // one queued under a guessed folder id would otherwise be rejected again after the id is fixed.
 //
@@ -34,6 +38,7 @@
 //
 // The token rides only in the Authorization header. The URLs we call never contain it, and log lines
 // carry the profile id + HTTP status/message only — never the link.
+import { createHash } from 'node:crypto';
 import { rename } from 'node:fs/promises';
 import path from 'node:path';
 import type {
@@ -346,7 +351,21 @@ export function markRead(feed: JourneyFeed, receipts: readonly ReadReceipt[]): J
 // ---- HTTP to JS Journey ------------------------------------------------------------------------
 
 /** `retry.network`: no HTTP answer at all (the rest of the flush would fail the same way) vs an HTTP 5xx. */
-type SendResult = { kind: 'sent' } | { kind: 'rejected'; message: string } | { kind: 'retry'; message: string; network: boolean };
+/** `duplicate`: JS Journey already had this update id and stored nothing of this body (logged) */
+type SendResult = { kind: 'sent'; duplicate: boolean } | { kind: 'rejected'; message: string } | { kind: 'retry'; message: string; network: boolean };
+
+/** A session POST's 2xx: did JS Journey answer {status:'duplicate'}? The 2xx status IS the delivery; a
+ *  body that is not JSON (an older JS Journey, a proxy) or cut off by the request timeout is read as an
+ *  ordinary one — a throw here would fail the whole flush and send it again. */
+async function answeredDuplicate(res: Response): Promise<boolean> {
+  let body: unknown;
+  try {
+    body = JSON.parse(await res.text());
+  } catch {
+    return false;
+  }
+  return isRecord(body) && body.status === 'duplicate';
+}
 
 /** "Session overlaps…" from {error}/{message} JSON, else the trimmed text, else the status text. */
 async function describeFailure(res: Response): Promise<string> {
@@ -384,6 +403,37 @@ interface RejectedUpdate {
 interface DeliveredReceipt {
   id: string;
   at: string; // ISO
+  /** updateSig of the body delivered (absent in a receipt written before it existed: never matches) */
+  sig?: string;
+}
+
+/** What JS Journey keeps of an update, as a short hash: everything but the course label (re-sent under
+ *  this copy's id) and the progress snapshot (rebuilt on every send; JS Journey keeps the newest anyway).
+ *  The same sig = the same words, so a re-post of it is a no-op, not a change JS Journey would drop. */
+function updateSig(s: JourneySession): string {
+  const words = [
+    s.startedAt,
+    s.endedAt,
+    s.studyDate,
+    s.minutes,
+    s.sectionNumber,
+    s.lecturesCompleted.map((l) => [l.section, l.lecture, l.title]),
+    s.finishedSections,
+    s.mood,
+    s.note,
+    s.stuck,
+    s.autoClosed,
+  ];
+  return createHash('sha256').update(JSON.stringify(words)).digest('hex').slice(0, 16);
+}
+
+/** enqueue() refused a CHANGED copy of an update JS Journey already has (see the header). The message is
+ *  hers to read (the route answers 409 with it; the sign-off card shows it). */
+export class AlreadyDelivered extends Error {
+  constructor(readonly id: string) {
+    super('This update already reached Rahul — what you changed can’t be added to it. Send it as a Note to Rahul… instead.');
+    this.name = 'AlreadyDelivered';
+  }
 }
 
 /** <data>/outbox-<profile>.json. v1 had items + lastError, v2 added reads + progress, v3 adds rejected +
@@ -406,7 +456,7 @@ interface OutboxFile {
 /** Enough to list it and send it again; the full shape was validated when it was queued. */
 const isQueuedSession = (x: unknown): x is JourneySession => isRecord(x) && isString(x.id) && isString(x.endedAt);
 const isRejectedUpdate = (x: unknown): x is RejectedUpdate => isRecord(x) && isQueuedSession(x.session) && isString(x.error) && isString(x.at);
-const isDeliveredReceipt = (x: unknown): x is DeliveredReceipt => isRecord(x) && isString(x.id) && isString(x.at);
+const isDeliveredReceipt = (x: unknown): x is DeliveredReceipt => isRecord(x) && isString(x.id) && isString(x.at) && (x.sig === undefined || isString(x.sig));
 
 /** `pending` counts her queued updates only: receipts and the snapshot ride along without a badge, and a
  *  rejected update waits for a retry, not for the next flush. `updates`: one entry per id (queued beats
@@ -432,9 +482,14 @@ function view(o: OutboxFile): OutboxState {
 const hasWork = (o: OutboxFile): boolean => o.items.length > 0 || o.reads.length > 0 || o.progress !== null;
 const emptyOutbox = (): OutboxFile => ({ v: 3, items: [], rejected: [], delivered: [], reads: [], progress: null, lastError: null });
 
-function recordDelivered(o: OutboxFile, id: string, at: string): void {
+/** `duplicate`: JS Journey answered that it already had this id and stored nothing of THIS body — an
+ *  existing receipt then still describes the copy it has (its sig judges the next post), never this one. */
+function recordDelivered(o: OutboxFile, session: JourneySession, at: string, duplicate: boolean): void {
+  const { id } = session;
   o.rejected = o.rejected.filter((r) => r.session.id !== id);
-  o.delivered = [...o.delivered.filter((d) => d.id !== id), { id, at }].slice(-DELIVERED_KEEP);
+  const kept = duplicate ? o.delivered.find((d) => d.id === id) : undefined;
+  if (kept !== undefined) return;
+  o.delivered = [...o.delivered.filter((d) => d.id !== id), { id, at, sig: updateSig(session) }].slice(-DELIVERED_KEEP);
 }
 
 function recordRejected(o: OutboxFile, session: JourneySession, error: string, at: string): void {
@@ -447,8 +502,8 @@ function forCourse(session: JourneySession, courseId: string): JourneySession {
   return { ...session, course: courseId, progress: session.progress === null ? null : { ...session.progress, course: courseId } };
 }
 
-/** What JS Journey answered for good: delivered, or refused (4xx). */
-type Outcome = { kind: 'sent' } | { kind: 'rejected'; message: string };
+/** What JS Journey answered for good: delivered (`duplicate`: it already had the id), or refused (4xx). */
+type Outcome = { kind: 'sent'; duplicate: boolean } | { kind: 'rejected'; message: string };
 
 /** One delivery a flush makes; `settle` records JS Journey's final answer in the outbox. It is applied
  *  to the outbox as it is AFTER the requests (re-read under the lock: items may have been queued
@@ -481,7 +536,7 @@ function jobsFor(outbox: OutboxFile, courseId: string): Job[] {
       settle: (o, outcome, at) => {
         const before = o.items.length;
         o.items = o.items.filter((s) => JSON.stringify(s) !== sent);
-        if (outcome.kind === 'sent') recordDelivered(o, session.id, at);
+        if (outcome.kind === 'sent') recordDelivered(o, session, at, outcome.duplicate);
         else if (o.items.length < before) recordRejected(o, session, outcome.message, at);
       },
     };
@@ -642,8 +697,9 @@ export class Journey {
       return { kind: 'retry', message: networkMessage(err), network: true };
     }
     if (res.ok) {
+      if (job.kind === 'session') return { kind: 'sent', duplicate: await answeredDuplicate(res) };
       await res.body?.cancel();
-      return { kind: 'sent' };
+      return { kind: 'sent', duplicate: false };
     }
     const message = `HTTP ${res.status} — ${await describeFailure(res)}`;
     return res.status >= 400 && res.status < 500 ? { kind: 'rejected', message } : { kind: 'retry', message, network: false };
@@ -703,16 +759,29 @@ export class Journey {
   /** Queues a validated session — connected or not (v3: an update is never turned away; it goes out once
    *  she connects) — and answers with the outbox as saved; delivery starts in the background. Do NOT await
    *  the flush here (see the header, 2026-10-01 review). A re-sent id replaces the queued one, and takes a
-   *  rejected one back into the queue ("Try again" with her edited note). */
+   *  rejected one back into the queue ("Try again" with her edited note). An id already DELIVERED is never
+   *  queued again (JS Journey would only answer "duplicate"): the same words are a no-op, a changed copy
+   *  throws AlreadyDelivered (see the header). */
   async enqueue(profile: string, session: JourneySession): Promise<OutboxState> {
+    const sig = updateSig(session);
+    let delivered: 'same' | 'changed' | null = null;
     const saved = await this.change(profile, (outbox) => {
+      const receipt = outbox.delivered.find((d) => d.id === session.id);
+      if (receipt !== undefined) {
+        delivered = receipt.sig === sig ? 'same' : 'changed';
+        return false;
+      }
       outbox.rejected = outbox.rejected.filter((r) => r.session.id !== session.id);
       const i = outbox.items.findIndex((s) => s.id === session.id);
       if (i >= 0) outbox.items[i] = session;
       else outbox.items.push(session);
       return true;
     });
-    this.deliverSoon(profile);
+    if (delivered === 'changed') {
+      this.opts.log(`[journey] ${profile}: session ${session.id} already reached JS Journey — a changed copy was refused`);
+      throw new AlreadyDelivered(session.id);
+    }
+    if (delivered === null) this.deliverSoon(profile);
     return saved;
   }
 
@@ -805,6 +874,7 @@ export class Journey {
         done.push({ job, outcome: result, at: new Date().toISOString() });
         if (result.kind === 'sent') {
           sent[job.kind]++;
+          if (result.duplicate) log(`[journey] ${profile}: ${job.what} was already on JS Journey (answered duplicate) — it kept the copy it had`);
           if (job.kind === 'reads') delivered.push(...queued.reads.filter((r) => (job.body as { ids: string[] }).ids.includes(r.id)));
         } else {
           error = result.message;

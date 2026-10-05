@@ -10,11 +10,11 @@
 import { mkdir } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { BootPayload, Course, JourneySession, ProgressSnapshot, ProgressState } from '../shared/types.ts';
+import type { BootPayload, Course, JourneySession, OutboxState, ProgressSnapshot, ProgressState } from '../shared/types.ts';
 import { ConfigStore, PROFILE_ID_RE } from './config.ts';
 import { folderCourseId, resolveCourseId, type ResolvedCourseId } from './course-id.ts';
 import { HttpError, readJsonBody, sendEmpty, sendJson } from './http.ts';
-import { Journey, OUTBOX_WAIT_MAX_MS, parseReadIds, parseRetryIds, validateProgressSnapshot, validateSession } from './journey.ts';
+import { AlreadyDelivered, Journey, OUTBOX_WAIT_MAX_MS, parseReadIds, parseRetryIds, validateProgressSnapshot, validateSession } from './journey.ts';
 import { errorMessage, type Log } from './log.ts';
 import { serveMedia } from './media.ts';
 import { scanCourse } from './scan.ts';
@@ -191,7 +191,15 @@ export async function createCourseServer(opts: AppOptions): Promise<CourseServer
           if (problem !== null) throw new HttpError(400, problem);
           // v3: accepted while not connected too — kept in the outbox, delivered once she connects (v2
           // 409'd here and the browser forgot the update)
-          sendJson(res, 202, await journey.enqueue(profile, body as JourneySession)); // shape proved just above
+          let state: OutboxState;
+          try {
+            state = await journey.enqueue(profile, body as JourneySession); // shape proved just above
+          } catch (err) {
+            // a changed copy of an update JS Journey already has: it would answer "duplicate" and drop it
+            if (err instanceof AlreadyDelivered) throw new HttpError(409, err.message);
+            throw err;
+          }
+          sendJson(res, 202, state);
         },
       },
     },
