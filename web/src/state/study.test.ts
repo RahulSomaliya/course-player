@@ -352,6 +352,13 @@ describe('StudyController: v2 state left in this browser (spec v3 A3 "Legacy v2 
     expect(sent).toHaveLength(1);
   });
 
+  it('two opens at once (StrictMode runs App\'s effect twice) share ONE migration', async () => {
+    const storage = memoryStore({ [`cp:${course.id}:mansi:session`]: JSON.stringify(v2('live', 42 * 60)) });
+    const { study, sent } = setup({ storage });
+    await Promise.all([study.migrateLegacy(), study.migrateLegacy()]);
+    expect(sent.map((s) => s.id)).toEqual(['live']);
+  });
+
   it('nothing left from v2 → nothing sent', async () => {
     const { study, sent } = setup();
     await study.migrateLegacy();

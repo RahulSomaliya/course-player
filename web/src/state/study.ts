@@ -84,6 +84,9 @@ export class StudyController {
   private activity: Activity = { lectureId: null, playing: false, reading: false };
   private lastInputAt: number;
   private ticks = 0;
+  /** the v2 → v3 migration in flight: StrictMode runs App's effect twice, and two runs POSTed every v2
+   *  session twice (harmless — same ids — but each one a needless request and log line) */
+  private migration: Promise<number> | null = null;
   /** section number → player seconds not yet committed to the session (SECTION_FLUSH_TICKS) */
   private readonly carry = new Map<number, number>();
   private readonly ticker: StudyTicker;
@@ -237,9 +240,16 @@ export class StudyController {
    * (autoClosed, no note); the keys are removed only after the server took them all — otherwise the next
    * open tries again (same ids: the outbox replaces, JS Journey dedups). Waits for hydrate: the updates'
    * snapshot must come from the SSD copy, never a cleared browser's empty one (2026-10-01 review).
-   * Returns how many went to the outbox.
+   * Returns how many went to the outbox. Concurrent calls share one run.
    */
-  async migrateLegacy(): Promise<number> {
+  migrateLegacy(): Promise<number> {
+    this.migration ??= this.migrate().finally(() => {
+      this.migration = null;
+    });
+    return this.migration;
+  }
+
+  private async migrate(): Promise<number> {
     const courseIds = [this.deps.courseId, this.deps.legacyCourseId];
     const { sessions, keys } = readLegacy(this.deps.storage, courseIds, this.deps.profile);
     if (keys.length === 0) return 0;
