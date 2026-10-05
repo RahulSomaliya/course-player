@@ -7,7 +7,8 @@ Design decisions: `docs/design.md`. First course: `/Volumes/Rahul's SSD/Courses/
 - install: `npm install --cache <scratchpad>/npm-cache` (`~/.npm` is root-owned; new deps need `--before=$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)` — see global CLAUDE.md)
 - dev: `COURSE_ROOT="/Volumes/Rahul's SSD/Courses/Coding FE/React 2023" npm run dev:server` + `npm run dev:web` (Vite 5173 proxies to 8795)
 - test: `npm test` (vitest) · typecheck: `npm run typecheck` · build web: `npm run build`
-- single executables: `npm run build:sea` · ship to SSD: `npm run deploy -- "<course root>"`
+- single executables: `npm run build:sea` · ship to SSD: `npm run deploy -- "<course root>" [label] [--course-id <id>]`
+  (writes `.player/course.json`; updating Mansi's own copy = README "Update Mansi's copy", never her `.player/data`)
 
 ## Structure
 - `shared/types.ts` — the API contract; change it first, then both ends
@@ -22,11 +23,14 @@ Design decisions: `docs/design.md`. First course: `/Volumes/Rahul's SSD/Courses/
 ## Architecture map
 | Where is… | |
 |---|---|
+| course id (pinned, never the folder) | `server/course-id.ts` ← `<course>/.player/course.json` (deploy) → config `courseId` → folder slug + WARNING |
 | course scan / name parsing | `server/scan.ts`, `server/names.ts` |
 | mp4 duration | `server/mp4.ts` (+ `data/durations.json` cache) |
 | media streaming + path guard | `server/media.ts` |
 | progress LWW + atomic writes | `server/store.ts` |
 | JS Journey proxy + outbox | `server/journey.ts` (contract: `~/Developer/js-journey/lib/player.ts`) |
+| delivery state of her updates | `GET /api/journey/:p/outbox?wait=` → `OutboxState.updates` (queued / rejected / delivered); "Try again" = `POST …/outbox/retry`; wrappers in `web/src/lib/api.ts` |
+| "course not recognised" | `JourneyProblem` — 409 from status + connect; `ApiError.problem` in the web |
 | sign-offs, pending sessions, 24 h rule | `web/src/state/study.ts`, `web/src/screens/SignOffCard.tsx` |
 | feed, Got it, snapshot push | `web/src/state/journey.ts`, `web/src/lib/feed.ts` |
 | study time / sessions / stats | `web/src/lib/` |
@@ -61,8 +65,21 @@ the JS Journey token. Clients get a status code + short message. Web shows calm 
   request to it — a write queued behind a slow flush is the same slow 202 (`server/journey.ts`
   `locks` vs `flushLocks`). The first feed page waits (bounded) for deliveries in flight instead.
 - Local validation must be at least as strict as JS Journey's (`~/Developer/js-journey/lib/player.ts`):
-  the outbox drops a 4xx'd item for good. Read ids are uuids, ≤ 500 per POST (the outbox batches);
-  sectionNumber ≥ 1 (note-only falls back to her last section); minutes ≤ 1440. QA stub ids are uuids.
+  a 4xx'd update sits as "Didn't reach Rahul" until a retry, and a 4xx'd read receipt / snapshot is
+  dropped. Read ids are uuids, ≤ 500 per POST (the outbox batches); sectionNumber ≥ 1 (note-only falls
+  back to her last section); minutes ≤ 1440. QA stub ids are uuids.
+- Course.id NEVER comes from the folder name (2026-10-05): her copy's folder was not `React 2023`, so the
+  id was not `react-2023`; JS Journey 404'd "unknown course", the outbox dropped her sign-off and the card
+  had flashed "Sent ✓". It is pinned in `.player/course.json` (deploy `--course-id`; outside `data/` so
+  copying the app files carries it) → config `courseId` → folder slug only with a loud `[scan] WARNING`
+  (`server/course-id.ts`). Browser keys are `cp:<course.id>:…`: a changed id orphans this browser's
+  pre-v3 keys — they sit under `BootPayload.folderCourseId`. "Unknown course" is a visible state
+  (`JourneyProblem`, 409), never a silent 204; the match is on JS Journey's "unknown course" text.
+- NEVER drop an update (her minutes + note): JS Journey 4xx → kept as `rejected` with the reason,
+  re-queued once on every server start, on (re)connect and on "Try again"; not connected → accepted and
+  kept, delivered on connect; every send uses the CURRENT course id (one queued under a guessed id would
+  fail again after the fix). Only read receipts and snapshots may be dropped. A 202 means "in the local
+  outbox", never "sent": "Sent ✓" needs a `delivered` entry in `OutboxState.updates` (`server/journey.ts`).
 - Home motion below the fold must wait until it is seen (`useSeenOnce`), and the page transition fades
   through, never across — see the docs/design.md motion table before touching any timing.
 - Feed and pace are MIRRORS of JS Journey (`lib/journey-view.ts`): "From Rahul" + the read queue + the

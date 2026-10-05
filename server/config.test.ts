@@ -73,6 +73,21 @@ describe('ConfigStore', () => {
     ]);
   });
 
+  it('v3 reads an optional courseId; a v2 config.json (her Mac: title, profiles, her link) loads unchanged', async () => {
+    const v2 = { ...seed, profiles: [{ id: 'rahul', name: 'Rahul' }, { id: 'mansi', name: 'Mansi', journeyLink: 'https://jj.example/m/tok_m' }] };
+    await writeFile(path.join(dir, 'config.json'), JSON.stringify(v2, null, 2) + '\n');
+    const config = await ConfigStore.load(dir);
+    expect(config.courseId).toBeNull();
+    expect(config.title).toBe(seed.title);
+    expect(config.journeyLink('mansi')).toBe('https://jj.example/m/tok_m');
+    expect(config.profiles()[1]).toEqual({ id: 'mansi', name: 'Mansi', journeyConnected: true });
+
+    await writeFile(path.join(dir, 'config.json'), JSON.stringify({ ...seed, courseId: 'react-2023' }));
+    expect((await ConfigStore.load(dir)).courseId).toBe('react-2023');
+    await writeFile(path.join(dir, 'config.json'), JSON.stringify({ ...seed, courseId: 'React 2023' }));
+    await expect(ConfigStore.load(dir)).rejects.toThrow(/courseId must be/);
+  });
+
   it('fails loudly (with the path) on invalid JSON or an invalid shape', async () => {
     await writeFile(path.join(dir, 'config.json'), '{nope');
     await expect(ConfigStore.load(dir)).rejects.toThrow(/config\.json/);

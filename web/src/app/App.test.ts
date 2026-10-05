@@ -26,7 +26,7 @@ const ssdCopy: ProgressState = {
   days: { '2026-09-30': 5400 },
 };
 
-let boot: BootPayload = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: false }], version: 'test' };
+let boot: BootPayload = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: false }], version: 'test', courseIdFrom: 'course.json', folderCourseId: course.id };
 const json = (body: unknown): Response => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
 /** Stubs the course server; GET /api/progress/mansi answers when `progress` resolves. `calls` = every
@@ -75,7 +75,7 @@ async function mount(ms: number): Promise<HTMLElement> {
 }
 
 afterEach(() => {
-  boot = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: false }], version: 'test' };
+  boot = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: false }], version: 'test', courseIdFrom: 'course.json', folderCourseId: course.id };
   window.location.hash = '';
   if (root !== null) act(() => root?.unmount());
   root = null;
@@ -131,7 +131,7 @@ describe('<App/> v2: one learner', () => {
   });
 
   it('the next open after closing without signing off asks for that session\'s note', async () => {
-    boot = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: true }], version: 'test' };
+    boot = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: true }], version: 'test', courseIdFrom: 'course.json', folderCourseId: course.id };
     stubServer(Promise.resolve(ssdCopy));
     const tue = new Date(Date.now() - 2 * 86_400_000);
     tue.setHours(19, 0, 0, 0);
@@ -160,7 +160,7 @@ describe('<App/> v2: the 24 h rule at open', () => {
   // `pending`, so the at-open card asked about it too and dropped the note she typed. And it ran before
   // hydrate, so the update's snapshot came from this browser's (here: empty) copy, not the SSD's.
   it('a session she skipped that is now over 24 h old is sent for her — from the SSD progress — and the card does not ask', async () => {
-    boot = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: true }], version: 'test' };
+    boot = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: true }], version: 'test', courseIdFrom: 'course.json', folderCourseId: course.id };
     const { sessions } = stubServer(Promise.resolve(ssdCopy));
     const tue = new Date(Date.now() - 3 * 86_400_000);
     localStorage.setItem(

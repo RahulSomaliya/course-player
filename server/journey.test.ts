@@ -3,7 +3,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { JourneyFeed, JourneySession, JourneyStatus, ProgressSnapshot } from '../shared/types.ts';
+import type { JourneyFeed, JourneySession, JourneyStatus, PlanRow, ProgressSnapshot } from '../shared/types.ts';
 import { ConfigStore } from './config.ts';
 import {
   Journey,
@@ -274,38 +274,50 @@ describe('validation', () => {
 describe('outbox', () => {
   it('2xx: sends with the Bearer token and removes the session', async () => {
     reply = () => ({ status: 201, body: { ok: true } });
-    expect(await journey.enqueue('mansi', session('s1'))).toEqual({ pending: 1, lastError: null }); // saved, not yet sent
-    expect(await journey.settled('mansi')).toEqual({ pending: 0, lastError: null });
+    expect(await journey.enqueue('mansi', session('s1'))).toMatchObject({ pending: 1, lastError: null }); // saved, not yet sent
+    expect(await journey.settled('mansi')).toMatchObject({ pending: 0, lastError: null });
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ method: 'POST', url: '/api/player/sessions', auth: `Bearer ${TOKEN}` });
     expect(JSON.parse(seen[0]?.body ?? '')).toEqual(session('s1'));
-    expect(await journey.settled('mansi')).toEqual({ pending: 0, lastError: null });
+    expect(await journey.settled('mansi')).toMatchObject({ pending: 0, lastError: null });
     expect(logged).toContain('[journey] mansi: sent 1, 0 pending');
   });
 
-  it('4xx: removes the session too (no endless retries) and keeps the message in lastError', async () => {
+  it('4xx: takes the session out of the queue (no endless retries) but KEEPS it as rejected (v3: never dropped)', async () => {
     reply = () => ({ status: 422, body: { error: 'Session overlaps another one' } });
     await journey.enqueue('mansi', session('s1'));
-    expect(await journey.settled('mansi')).toEqual({ pending: 0, lastError: 'HTTP 422 — Session overlaps another one' });
-    expect(logged.some((l) => l.startsWith('[journey] mansi: HTTP 422 — Session overlaps another one'))).toBe(true);
-    // a later success clears it
+    const state = await journey.settled('mansi');
+    expect(state).toMatchObject({ pending: 0, lastError: 'HTTP 422 — Session overlaps another one' });
+    expect(state.updates).toEqual([
+      { id: 's1', state: 'rejected', at: expect.any(String), error: 'HTTP 422 — Session overlaps another one', session: session('s1') },
+    ]);
+    expect(logged.some((l) => l.startsWith('[journey] mansi: HTTP 422 — Session overlaps another one (session s1 kept as rejected)'))).toBe(true);
+    // a later success clears lastError; the rejected one stays until re-queued
     reply = () => ({ status: 200 });
     await journey.enqueue('mansi', session('s2'));
-    expect(await journey.settled('mansi')).toEqual({ pending: 0, lastError: null });
+    const after = await journey.settled('mansi');
+    expect(after).toMatchObject({ pending: 0, lastError: null });
+    expect(after.updates.map((u) => [u.id, u.state])).toEqual(
+      expect.arrayContaining([
+        ['s1', 'rejected'],
+        ['s2', 'delivered'],
+      ]),
+    );
+    expect((await outboxOnDisk()).rejected).toHaveLength(1);
   });
 
   it('5xx: keeps the session, survives a restart, and delivers it on the next flush', async () => {
     reply = () => ({ status: 503, body: { message: 'maintenance' } });
     await journey.enqueue('mansi', session('s1'));
-    expect(await journey.settled('mansi')).toEqual({ pending: 1, lastError: 'HTTP 503 — maintenance' });
-    expect(await journey.enqueue('mansi', session('s2'))).toEqual({ pending: 2, lastError: 'HTTP 503 — maintenance' });
-    expect(await journey.settled('mansi')).toEqual({ pending: 2, lastError: 'HTTP 503 — maintenance' });
+    expect(await journey.settled('mansi')).toMatchObject({ pending: 1, lastError: 'HTTP 503 — maintenance' });
+    expect(await journey.enqueue('mansi', session('s2'))).toMatchObject({ pending: 2, lastError: 'HTTP 503 — maintenance' });
+    expect(await journey.settled('mansi')).toMatchObject({ pending: 2, lastError: 'HTTP 503 — maintenance' });
     // her updates stay in order: after a 5xx on the oldest, the newer ones wait for the next flush
     expect(seen.filter((s) => s.method === 'POST')).toHaveLength(2);
 
     const restarted = await makeJourney();
     reply = () => ({ status: 200 });
-    expect(await restarted.flush('mansi')).toEqual({ pending: 0, lastError: null });
+    expect(await restarted.flush('mansi')).toMatchObject({ pending: 0, lastError: null });
     expect(seen.slice(-2).map((s) => (JSON.parse(s.body) as JourneySession).id)).toEqual(['s1', 's2']);
   });
 
@@ -323,14 +335,16 @@ describe('outbox', () => {
     expect((await journey.enqueue('mansi', session('s1', { note: 'second' })))?.pending).toBe(1);
   });
 
-  it('refuses sessions for a profile without a JS Journey link and writes nothing', async () => {
-    expect(await journey.enqueue('rahul', session('s1'))).toBeNull();
-    expect((await readdir(dir)).filter((f) => f.startsWith('outbox'))).toEqual([]);
+  it('v3: accepts sessions for a profile without a JS Journey link, keeps them, and sends none', async () => {
+    expect(await journey.enqueue('rahul', session('s1'))).toMatchObject({ pending: 1, lastError: null });
+    expect(await journey.settled('rahul')).toMatchObject({ pending: 1, updates: [{ id: 's1', state: 'queued' }] });
+    expect((await readdir(dir)).filter((f) => f.startsWith('outbox'))).toEqual(['outbox-rahul.json']);
+    expect(seen).toEqual([]);
   });
 
   it('moves an unreadable outbox aside instead of crashing or silently dropping it', async () => {
     await writeFile(path.join(dir, 'outbox-mansi.json'), '{"items": [tru');
-    expect(await journey.settled('mansi')).toEqual({ pending: 0, lastError: null });
+    expect(await journey.settled('mansi')).toMatchObject({ pending: 0, lastError: null });
     expect(await readdir(dir)).toContain('outbox-mansi.json.corrupt');
     expect(logged).toContain('[journey] mansi: outbox-mansi.json is unreadable — moved aside to outbox-mansi.json.corrupt');
   });
@@ -340,7 +354,7 @@ describe('outbox', () => {
     await journey.enqueue('mansi', session('s1'));
     await journey.settled('mansi'); // the delivery the enqueue started
     const before = seen.length;
-    expect(await journey.flush('mansi', Date.now() - 1)).toEqual({ pending: 1, lastError: 'HTTP 503 — down' });
+    expect(await journey.flush('mansi', Date.now() - 1)).toMatchObject({ pending: 1, lastError: 'HTTP 503 — down' });
     expect(seen.length).toBe(before);
   });
 
@@ -398,11 +412,11 @@ describe('the 202 does not wait for JS Journey', () => {
   it('answers as soon as the update is saved, then delivers it in the background', async () => {
     const slow = await slowJourney(400);
     const t0 = Date.now();
-    expect(await journey.enqueue('mansi', session('s1'))).toEqual({ pending: 1, lastError: null });
-    expect(await journey.enqueueReads('mansi', [M_REPLY])).toEqual({ pending: 1, lastError: null });
-    expect(await journey.enqueueProgress('mansi', snapshot(5))).toEqual({ pending: 1, lastError: null });
+    expect(await journey.enqueue('mansi', session('s1'))).toMatchObject({ pending: 1, lastError: null });
+    expect(await journey.enqueueReads('mansi', [M_REPLY])).toMatchObject({ pending: 1, lastError: null });
+    expect(await journey.enqueueProgress('mansi', snapshot(5))).toMatchObject({ pending: 1, lastError: null });
     expect(Date.now() - t0).toBeLessThan(250);
-    expect(await journey.settled('mansi')).toEqual({ pending: 0, lastError: null });
+    expect(await journey.settled('mansi')).toMatchObject({ pending: 0, lastError: null });
     expect(slow.events.filter((e) => e.endsWith(' out'))).toEqual(['POST /api/player/sessions out', 'POST /api/player/feed/read out', 'PUT /api/player/progress out']);
     await slow.close();
   });
@@ -419,24 +433,55 @@ describe('the 202 does not wait for JS Journey', () => {
 describe('status proxy + link check', () => {
   it('returns the JourneyStatus for a connected profile, asking for this course with the token', async () => {
     reply = () => ({ status: 200, body: status });
-    expect(await journey.status('mansi')).toEqual(status);
+    expect(await journey.status('mansi')).toEqual({ kind: 'status', status });
     expect(seen[0]).toMatchObject({ method: 'GET', url: '/api/player/status?course=react-2023', auth: `Bearer ${TOKEN}` });
   });
 
   it('fills the fields an older JS Journey omits, so the browser always gets the full contract', async () => {
     const { sectionDue: _d, skippedSections: _s, planBreak: _b, studyWeekdays: _w, planBreaks: _p, ...v1 } = status;
     reply = () => ({ status: 200, body: v1 });
-    expect(await journey.status('mansi')).toEqual({ ...status, ...V1_DEFAULTS });
+    expect(await journey.status('mansi')).toEqual({ kind: 'status', status: { ...status, ...V1_DEFAULTS } });
   });
 
-  it('returns null when not connected, on non-2xx, or for an unexpected body', async () => {
-    expect(await journey.status('rahul')).toBeNull();
+  it('none when not connected, on non-2xx, or for an unexpected body', async () => {
+    expect(await journey.status('rahul')).toEqual({ kind: 'none' });
     reply = () => ({ status: 500, body: { error: 'boom' } });
-    expect(await journey.status('mansi')).toBeNull();
+    expect(await journey.status('mansi')).toEqual({ kind: 'none' });
     reply = () => ({ status: 200, body: { hello: 'world' } });
-    expect(await journey.status('mansi')).toBeNull();
+    expect(await journey.status('mansi')).toEqual({ kind: 'none' });
     reply = () => ({ status: 204 });
-    expect(await journey.status('mansi')).toBeNull();
+    expect(await journey.status('mansi')).toEqual({ kind: 'none' });
+    // a 404 that is not JS Journey's "unknown course" (a wrong host, an old deploy) is not the course's fault
+    reply = () => ({ status: 404, body: { error: 'Not found' } });
+    expect(await journey.status('mansi')).toEqual({ kind: 'none' });
+  });
+
+  // 2026-10-05: her copy asked about "react-course"; JS Journey 404'd and the player showed nothing at all.
+  it('v3: JS Journey 404 "unknown course" is a problem the browser sees, naming the id (never a silent none)', async () => {
+    reply = () => ({ status: 404, body: { error: 'unknown course "react-2023"' } });
+    const result = await journey.status('mansi');
+    expect(result).toEqual({
+      kind: 'problem',
+      problem: { problem: 'unknown-course', courseId: 'react-2023', error: expect.stringContaining("'react-2023'") as unknown },
+    });
+    expect(logged.some((l) => l.includes('mansi: status HTTP 404 — unknown course'))).toBe(true);
+  });
+
+  it('v3: passes the plan through, and drops (logged) a malformed plan without losing the status', async () => {
+    const plan: PlanRow[] = [
+      { kind: 'week', week: 1, due: '2026-10-09', goal: '§3 A First Look at React', state: 'current' },
+      { kind: 'break', label: 'Diwali', start: '2026-11-01', end: '2026-11-15', now: false },
+      { kind: 'week', week: 5, due: '2026-11-20', goal: 'Keep going: §29 …', state: 'upcoming' },
+    ];
+    reply = () => ({ status: 200, body: { ...status, plan } });
+    expect(await journey.status('mansi')).toEqual({ kind: 'status', status: { ...status, plan } });
+    for (const bad of [{}, [{ kind: 'week', week: 1, due: '2026-10-09', goal: 'x', state: 'late' }], [{ kind: 'break', label: 'D', start: '2026-11-01', end: '2026-11-15' }]]) {
+      reply = () => ({ status: 200, body: { ...status, plan: bad } });
+      const r = await journey.status('mansi');
+      expect(r).toEqual({ kind: 'status', status });
+      expect(r.kind === 'status' && 'plan' in r.status).toBe(false);
+    }
+    expect(logged.filter((l) => l === '[journey] mansi: status plan has an unexpected shape — dropped')).toHaveLength(3);
   });
 
   it('checkLink: 400 for a malformed link, 502 when JS Journey rejects it, ok on 2xx', async () => {
@@ -446,6 +491,16 @@ describe('status proxy + link check', () => {
     reply = () => ({ status: 200, body: status });
     expect(await journey.checkLink(`${stubOrigin}/m/${TOKEN}`)).toEqual({ ok: true, link: `${stubOrigin}/m/${TOKEN}` });
     expect(await journey.checkLink(`http://127.0.0.1:9/m/${TOKEN}`)).toMatchObject({ ok: false, status: 502 });
+  });
+
+  it('v3 checkLink: a good link for a course JS Journey does not know is refused with 409, naming the id', async () => {
+    reply = () => ({ status: 404, body: { error: 'unknown course "react-2023"' } });
+    expect(await journey.checkLink(`${stubOrigin}/m/${TOKEN}`)).toEqual({
+      ok: false,
+      status: 409,
+      message: "JS Journey doesn't know the course 'react-2023' — this copy's course id is wrong; ask Rahul.",
+      problem: { problem: 'unknown-course', courseId: 'react-2023', error: "JS Journey doesn't know the course 'react-2023' — this copy's course id is wrong; ask Rahul." },
+    });
   });
 });
 
@@ -458,7 +513,10 @@ async function onDisk(name: string): Promise<unknown> {
 }
 
 interface OutboxOnDisk {
+  v: number;
   items: JourneySession[];
+  rejected: { session: JourneySession; error: string; at: string }[];
+  delivered: { id: string; at: string }[];
   reads: { id: string; at: string }[];
   progress: ProgressSnapshot | null;
   lastError: string | null;
@@ -550,7 +608,7 @@ describe('feed', () => {
 
 describe('read receipts', () => {
   it('POSTs {ids} to /api/player/feed/read with the token', async () => {
-    expect(await journey.enqueueReads('mansi', [M_REPLY, M_NOTE])).toEqual({ pending: 0, lastError: null });
+    expect(await journey.enqueueReads('mansi', [M_REPLY, M_NOTE])).toMatchObject({ pending: 0, lastError: null });
     await journey.settled('mansi');
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ method: 'POST', url: '/api/player/feed/read', auth: `Bearer ${TOKEN}` });
@@ -569,16 +627,16 @@ describe('read receipts', () => {
 
     const restarted = await makeJourney();
     await config.setJourneyLink('mansi', `${stubOrigin}/m/${TOKEN}`);
-    expect(await restarted.flush('mansi')).toEqual({ pending: 0, lastError: null });
+    expect(await restarted.flush('mansi')).toMatchObject({ pending: 0, lastError: null });
     expect(seen.map((s) => [s.url, JSON.parse(s.body) as unknown])).toEqual([['/api/player/feed/read', { ids: [a, b, c] }]]);
-    expect(await restarted.flush('mansi')).toEqual({ pending: 0, lastError: null });
+    expect(await restarted.flush('mansi')).toMatchObject({ pending: 0, lastError: null });
     expect(seen).toHaveLength(1);
   });
 
   it('4xx drops them (no endless retries) and keeps the message in lastError', async () => {
     reply = () => ({ status: 422, body: { error: 'Unknown message id' } });
     await journey.enqueueReads('mansi', [msgId(99)]);
-    expect(await journey.settled('mansi')).toEqual({ pending: 0, lastError: 'HTTP 422 — Unknown message id' });
+    expect(await journey.settled('mansi')).toMatchObject({ pending: 0, lastError: 'HTTP 422 — Unknown message id' });
     expect((await outboxOnDisk()).reads).toEqual([]);
   });
 
@@ -588,7 +646,7 @@ describe('read receipts', () => {
     await journey.enqueueReads('mansi', [msgId(500)]);
     await journey.settled('mansi');
     await config.setJourneyLink('mansi', `${stubOrigin}/m/${TOKEN}`);
-    expect(await journey.flush('mansi')).toEqual({ pending: 0, lastError: null });
+    expect(await journey.flush('mansi')).toMatchObject({ pending: 0, lastError: null });
     expect(seen.map((s) => (JSON.parse(s.body) as { ids: string[] }).ids.length)).toEqual([500, 1]);
     expect((await outboxOnDisk()).reads).toEqual([]);
   });
@@ -638,7 +696,7 @@ describe('read receipts', () => {
 
 describe('progress snapshot', () => {
   it('PUTs the snapshot to /api/player/progress with the token', async () => {
-    expect(await journey.enqueueProgress('mansi', snapshot(100))).toEqual({ pending: 0, lastError: null });
+    expect(await journey.enqueueProgress('mansi', snapshot(100))).toMatchObject({ pending: 0, lastError: null });
     await journey.settled('mansi');
     expect(seen[0]).toMatchObject({ method: 'PUT', url: '/api/player/progress', auth: `Bearer ${TOKEN}` });
     expect(JSON.parse(seen[0]?.body ?? '')).toEqual(snapshot(100));
@@ -665,7 +723,7 @@ describe('progress snapshot', () => {
   it('4xx drops it and keeps the message in lastError', async () => {
     reply = () => ({ status: 400, body: { error: 'course must be react-2023' } });
     await journey.enqueueProgress('mansi', snapshot(1));
-    expect(await journey.settled('mansi')).toEqual({ pending: 0, lastError: 'HTTP 400 — course must be react-2023' });
+    expect(await journey.settled('mansi')).toMatchObject({ pending: 0, lastError: 'HTTP 400 — course must be react-2023' });
     expect((await outboxOnDisk()).progress).toBeNull();
   });
 
@@ -683,7 +741,7 @@ describe('one outbox, one cadence', () => {
     await journey.enqueue('mansi', session('s2'));
     await journey.settled('mansi');
     await config.setJourneyLink('mansi', `${stubOrigin}/m/${TOKEN}`);
-    expect(await journey.flush('mansi')).toEqual({ pending: 0, lastError: null });
+    expect(await journey.flush('mansi')).toMatchObject({ pending: 0, lastError: null });
     expect(seen.map((s) => `${s.method} ${s.url}`)).toEqual([
       'POST /api/player/sessions',
       'POST /api/player/sessions',
@@ -703,7 +761,7 @@ describe('one outbox, one cadence', () => {
     await journey.enqueueProgress('mansi', snapshot(5));
     await journey.settled('mansi');
     await config.setJourneyLink('mansi', `${stubOrigin}/m/${TOKEN}`);
-    expect(await journey.flush('mansi')).toEqual({ pending: 2, lastError: 'HTTP 503 — insert failed' });
+    expect(await journey.flush('mansi')).toMatchObject({ pending: 2, lastError: 'HTTP 503 — insert failed' });
     expect(seen.map((s) => s.url)).toEqual(['/api/player/sessions', '/api/player/feed/read', '/api/player/progress']);
     const left = await outboxOnDisk();
     expect([left.reads, left.progress]).toEqual([[], null]);
@@ -746,8 +804,173 @@ describe('one outbox, one cadence', () => {
 
   it('still reads a v1 outbox file (sessions only)', async () => {
     await writeFile(path.join(dir, 'outbox-mansi.json'), JSON.stringify({ v: 1, items: [session('old')], lastError: 'HTTP 503 — down' }));
-    expect(await journey.settled('mansi')).toEqual({ pending: 1, lastError: 'HTTP 503 — down' });
-    expect(await journey.flush('mansi')).toEqual({ pending: 0, lastError: null });
+    expect(await journey.settled('mansi')).toMatchObject({ pending: 1, lastError: 'HTTP 503 — down' });
+    expect(await journey.flush('mansi')).toMatchObject({ pending: 0, lastError: null });
     expect(seen.map((s) => s.url)).toEqual(['/api/player/sessions']);
+  });
+});
+
+// ---- v3: the outbox never drops an update (docs/spec-v3-study-timer.md A2) ----------------------
+// 2026-10-05: a 4xx'd update was deleted for good, and an update made while not connected was never
+// queued at all — Mansi's sign-off vanished on both paths.
+
+describe('v3 outbox: every update reaches Rahul or stays visible', () => {
+  const COURSE_404 = { status: 400, body: { error: 'course "react-course" is not a JS Journey course (known: js-course, react-2023)' } };
+
+  it("loads her Mac's v2 outbox file unchanged (items + reads + progress + lastError) and delivers it", async () => {
+    const v2 = { v: 2, items: [session('a'), session('b')], reads: [{ id: msgId(7), at: '2026-10-05T08:00:00.000Z' }], progress: snapshot(3), lastError: 'HTTP 400 — unknown course' };
+    await writeFile(path.join(dir, 'outbox-mansi.json'), JSON.stringify(v2));
+    const before = await journey.outbox('mansi');
+    expect(before).toMatchObject({ pending: 2, lastError: 'HTTP 400 — unknown course' });
+    expect(before.updates.map((u) => [u.id, u.state])).toEqual([
+      ['a', 'queued'],
+      ['b', 'queued'],
+    ]);
+    expect(await journey.flush('mansi')).toMatchObject({ pending: 0, lastError: null });
+    expect(seen.map((r) => r.url)).toEqual(['/api/player/sessions', '/api/player/sessions', '/api/player/feed/read', '/api/player/progress']);
+    const disk = await outboxOnDisk();
+    expect(disk).toMatchObject({ v: 3, items: [], rejected: [], reads: [], progress: null, lastError: null });
+    expect(disk.delivered.map((d) => d.id)).toEqual(['a', 'b']);
+  });
+
+  it('a rejected update is re-queued on demand (Try again) and delivered; receipts say when', async () => {
+    reply = () => COURSE_404;
+    await journey.enqueue('mansi', session('s1'));
+    expect((await journey.settled('mansi')).updates).toMatchObject([{ id: 's1', state: 'rejected' }]);
+    reply = () => ({ status: 201, body: { status: 'created' } });
+    const t0 = Date.now();
+    expect(await journey.retry('mansi')).toMatchObject({ pending: 1, updates: [{ id: 's1', state: 'queued', error: null }] });
+    const state = await journey.settled('mansi');
+    expect(state).toMatchObject({ pending: 0, lastError: null, updates: [{ id: 's1', state: 'delivered', error: null }] });
+    expect(Date.parse(state.updates[0]?.at ?? '')).toBeGreaterThanOrEqual(t0 - 5);
+    expect('session' in (state.updates[0] ?? {})).toBe(false); // a receipt, not her update again
+    expect(logged).toContain('[journey] mansi: 1 rejected update(s) re-queued (try again)');
+  });
+
+  it('retry with ids re-queues only those; unknown ids are ignored', async () => {
+    reply = () => COURSE_404;
+    await journey.enqueue('mansi', session('s1'));
+    await journey.enqueue('mansi', session('s2'));
+    await journey.settled('mansi');
+    reply = () => ({ status: 503 }); // keep re-queued ones visible as queued
+    expect((await journey.retry('mansi', ['s2', 'nope'])).updates.map((u) => [u.id, u.state]).sort()).toEqual([
+      ['s1', 'rejected'],
+      ['s2', 'queued'],
+    ]);
+  });
+
+  it('server start re-queues every rejected update once, then flushes (a fixed course id makes them go through)', async () => {
+    reply = () => COURSE_404;
+    await journey.enqueue('mansi', session('s1'));
+    await journey.settled('mansi');
+    reply = () => ({ status: 201 });
+    const restarted = await makeJourney();
+    await restarted.start();
+    restarted.stop();
+    expect(await restarted.settled('mansi')).toMatchObject({ pending: 0, lastError: null, updates: [{ id: 's1', state: 'delivered' }] });
+    expect(logged).toContain('[journey] mansi: 1 rejected update(s) re-queued (server start)');
+  });
+
+  it('sends every update under THIS copy\'s course id, even one queued under an older (guessed) id', async () => {
+    const guessed = session('old', { course: 'react-course', progress: snapshot(4, { course: 'react-course' }) });
+    await writeFile(path.join(dir, 'outbox-mansi.json'), JSON.stringify({ v: 3, items: [], rejected: [{ session: guessed, error: 'HTTP 400 — course "react-course" is not a JS Journey course', at: '2026-10-05T08:40:00.000Z' }], delivered: [], reads: [], progress: snapshot(5, { course: 'react-course' }), lastError: null }));
+    reply = () => ({ status: 201 });
+    await journey.retry('mansi');
+    await journey.settled('mansi');
+    const sent = seen.map((r) => JSON.parse(r.body) as { course: string; progress?: { course: string } | null });
+    expect(sent.map((b) => b.course)).toEqual(['react-2023', 'react-2023']);
+    expect(sent[0]?.progress?.course).toBe('react-2023');
+    expect(logged).toContain('[journey] mansi: session old was queued for course "react-course" — sent as "react-2023"');
+  });
+
+  it('re-posting a rejected id (her edited note) moves it back to the queue — one entry per id', async () => {
+    reply = () => COURSE_404;
+    await journey.enqueue('mansi', session('s1', { note: 'first' }));
+    await journey.settled('mansi');
+    reply = () => ({ status: 503 });
+    const state = await journey.enqueue('mansi', session('s1', { note: 'edited' }));
+    expect(state.updates).toHaveLength(1);
+    expect(state.updates[0]).toMatchObject({ id: 's1', state: 'queued' });
+    expect(state.updates[0]?.state === 'queued' && state.updates[0].session.note).toBe('edited');
+    expect((await outboxOnDisk()).rejected).toEqual([]);
+  });
+
+  it('read receipts and snapshots are still dropped on 4xx (they carry no words of hers)', async () => {
+    reply = () => ({ status: 400, body: { error: 'bad ids' } });
+    await journey.enqueueReads('mansi', [msgId(3)]);
+    await journey.enqueueProgress('mansi', snapshot(9));
+    expect(await journey.settled('mansi')).toMatchObject({ pending: 0, updates: [] });
+    expect(await outboxOnDisk()).toMatchObject({ reads: [], progress: null, rejected: [] });
+  });
+
+  it('not connected: updates wait in the outbox and go out as soon as she connects', async () => {
+    await config.setJourneyLink('mansi', null);
+    expect(await journey.enqueue('mansi', session('s1'))).toMatchObject({ pending: 1 });
+    expect(await journey.settled('mansi')).toMatchObject({ pending: 1, lastError: null });
+    expect(seen).toEqual([]);
+    await config.setJourneyLink('mansi', `${stubOrigin}/m/${TOKEN}`);
+    reply = () => ({ status: 201 });
+    expect(await journey.flush('mansi')).toMatchObject({ pending: 0, updates: [{ id: 's1', state: 'delivered' }] });
+  });
+
+  it('keeps the last 50 delivery receipts (newest), all queued and all rejected', async () => {
+    const delivered = Array.from({ length: 60 }, (_, i) => ({ id: `d${i}`, at: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString() }));
+    await writeFile(path.join(dir, 'outbox-mansi.json'), JSON.stringify({ v: 3, items: [], rejected: [], delivered, reads: [], progress: null, lastError: null }));
+    reply = () => ({ status: 201 });
+    await journey.enqueue('mansi', session('new'));
+    const state = await journey.settled('mansi');
+    const ids = state.updates.map((u) => u.id);
+    expect(ids).toHaveLength(50);
+    expect(ids[0]).toBe('new');
+    expect(ids.at(-1)).toBe('d11');
+    expect((await outboxOnDisk()).delivered).toHaveLength(50);
+  });
+
+  it('lists updates newest first: queued (at = endedAt), rejected (at = when refused), delivered receipts', async () => {
+    await writeFile(
+      path.join(dir, 'outbox-mansi.json'),
+      JSON.stringify({
+        v: 3,
+        items: [session('q', { endedAt: '2026-10-05T12:00:00.000Z' })],
+        rejected: [{ session: session('r'), error: 'HTTP 400 — nope', at: '2026-10-05T11:00:00.000Z' }],
+        delivered: [{ id: 'd', at: '2026-10-05T13:00:00.000Z' }],
+        reads: [],
+        progress: null,
+        lastError: null,
+      }),
+    );
+    await config.setJourneyLink('mansi', null); // nothing is sent while we look
+    expect((await journey.outbox('mansi')).updates).toEqual([
+      { id: 'd', state: 'delivered', at: '2026-10-05T13:00:00.000Z', error: null },
+      { id: 'q', state: 'queued', at: '2026-10-05T12:00:00.000Z', error: null, session: session('q', { endedAt: '2026-10-05T12:00:00.000Z' }) },
+      { id: 'r', state: 'rejected', at: '2026-10-05T11:00:00.000Z', error: 'HTTP 400 — nope', session: session('r') },
+    ]);
+  });
+
+  it('an outbox whose rejected list is malformed is moved aside, never half-read', async () => {
+    await writeFile(path.join(dir, 'outbox-mansi.json'), JSON.stringify({ v: 3, items: [], rejected: [{ nope: 1 }], delivered: [], reads: [], progress: null, lastError: null }));
+    expect(await journey.outbox('mansi')).toMatchObject({ pending: 0, updates: [] });
+    expect(await readdir(dir)).toContain('outbox-mansi.json.corrupt');
+  });
+
+  it('outbox(profile, waitMs) answers once the delivery in flight settled (bounded)', async () => {
+    const slow = http.createServer((req, res) => {
+      req.resume();
+      setTimeout(() => {
+        res.writeHead(201, { 'content-type': 'application/json' });
+        res.end('{}');
+      }, 300);
+    });
+    await new Promise<void>((r) => slow.listen(0, '127.0.0.1', r));
+    await config.setJourneyLink('mansi', `http://127.0.0.1:${(slow.address() as AddressInfo).port}/m/${TOKEN}`);
+    await journey.enqueue('mansi', session('s1'));
+    expect((await journey.outbox('mansi', 2000)).updates).toMatchObject([{ id: 's1', state: 'delivered' }]);
+    await journey.enqueue('mansi', session('s2'));
+    const t0 = Date.now();
+    expect((await journey.outbox('mansi', 50)).updates[0]).toMatchObject({ id: 's2', state: 'queued' });
+    expect(Date.now() - t0).toBeLessThan(250);
+    await journey.settled('mansi');
+    slow.closeAllConnections();
+    await new Promise<void>((r) => slow.close(() => r()));
   });
 });

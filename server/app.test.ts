@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { BootPayload, JourneyFeed, OutboxState, Profile, ProgressSnapshot, ProgressState } from '../shared/types.ts';
+import type { BootPayload, JourneyFeed, JourneyProblem, OutboxState, Profile, ProgressSnapshot, ProgressState } from '../shared/types.ts';
 import { createCourseServer, type CourseServer } from './app.ts';
 import {
   feed,
@@ -146,6 +146,30 @@ describe('boot + progress', () => {
       { id: 'rahul', name: 'Rahul', journeyConnected: false },
       { id: 'mansi', name: 'Mansi', journeyConnected: false },
     ]);
+    // no .player/course.json and no courseId in config.json here: guessed, and said so
+    expect(body.courseIdFrom).toBe('folder');
+    expect(body.folderCourseId).toBe('react-2023');
+    expect(logged.some((l) => l.startsWith('[scan] WARNING: course id "react-2023" was guessed from the folder name'))).toBe(true);
+  });
+
+  // 2026-10-05: her copy's folder was not "React 2023" → id "react-course" → JS Journey 404'd her update.
+  it('v3: the course id is pinned by <course>/.player/course.json, whatever the folder is called', async () => {
+    await app.course();
+    await app.stop();
+    const renamed = path.join(tmp, 'React Course');
+    await writeTree(renamed, { '01 Welcome/01 Intro.mp4': mp4({ duration: 60_000 }), '.player/course.json': JSON.stringify({ id: 'react-2023' }) });
+    root = renamed;
+    await boot();
+    const body = (await request(port, 'GET', '/api/boot')).json() as BootPayload;
+    expect(body.course.id).toBe('react-2023');
+    expect(body.courseIdFrom).toBe('course.json');
+    expect(body.folderCourseId).toBe('react-course');
+    expect(logged.some((l) => l.includes('WARNING'))).toBe(false);
+    // sessions are validated against the pinned id
+    expect((await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody(session('s1')))).status).toBe(202);
+    const wrong = await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody(session('s2', { course: 'react-course' })));
+    expect(wrong.status).toBe(400);
+    expect((wrong.json() as { error: string }).error).toBe('course must be "react-2023"');
   });
 
   it('progress: 204 when none, PUT keeps the larger updatedAt, GET returns it', async () => {
@@ -207,10 +231,64 @@ describe('JS Journey routes', () => {
     expect(await readFile(path.join(dataDir, 'config.json'), 'utf8')).not.toContain(TOKEN);
   });
 
-  it('status is 204 when not connected; sessions 409 when not connected', async () => {
+  it('status is 204 when not connected; v3: sessions are ACCEPTED when not connected and go out on connect', async () => {
     expect((await request(port, 'GET', '/api/journey/mansi/status')).status).toBe(204);
     const res = await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody(session('s1')));
+    expect(res.status).toBe(202);
+    expect(res.json()).toMatchObject({ pending: 1, lastError: null, updates: [{ id: 's1', state: 'queued' }] });
+    expect(stub.seen).toEqual([]);
+    stub.setReply(() => ({ status: 201, body: {} }));
+    expect((await request(port, 'PUT', '/api/profiles/mansi/journey', jsonBody({ link: link() }))).status).toBe(200);
+    expect(await app.journey.settled('mansi')).toMatchObject({ pending: 0, updates: [{ id: 's1', state: 'delivered' }] });
+    expect(stub.seen.map((r) => r.url)).toEqual(['/api/player/status?course=react-2023', '/api/player/sessions']);
+  });
+
+  it('v3: status answers 409 JourneyProblem when JS Journey does not know the course (not a silent 204)', async () => {
+    await request(port, 'PUT', '/api/profiles/mansi/journey', jsonBody({ link: link() }));
+    stub.setReply(() => ({ status: 404, body: { error: 'unknown course "react-2023"' } }));
+    const res = await request(port, 'GET', '/api/journey/mansi/status');
     expect(res.status).toBe(409);
+    expect(res.json()).toEqual({
+      error: "JS Journey doesn't know the course 'react-2023' — this copy's course id is wrong; ask Rahul.",
+      problem: 'unknown-course',
+      courseId: 'react-2023',
+    } satisfies JourneyProblem);
+  });
+
+  it('v3: connect refuses a good link with 409 when JS Journey does not know the course (nothing saved)', async () => {
+    stub.setReply(() => ({ status: 404, body: { error: 'unknown course "react-2023"' } }));
+    const res = await request(port, 'PUT', '/api/profiles/mansi/journey', jsonBody({ link: link() }));
+    expect(res.status).toBe(409);
+    expect(res.json()).toMatchObject({ problem: 'unknown-course', courseId: 'react-2023', error: expect.stringContaining('ask Rahul') as unknown });
+    expect(await readFile(path.join(dataDir, 'config.json'), 'utf8')).not.toContain(TOKEN);
+  });
+
+  it('v3: outbox lists rejected updates; retry (CSRF) re-queues them; ?wait= waits for the delivery (bounded)', async () => {
+    await request(port, 'PUT', '/api/profiles/mansi/journey', jsonBody({ link: link() }));
+    stub.setReply(() => ({ status: 400, body: { error: 'course "react-2023" is not a JS Journey course' } }));
+    expect((await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody(session('s1')))).status).toBe(202);
+    const rejected = await request(port, 'GET', '/api/journey/mansi/outbox?wait=3000');
+    expect(rejected.json()).toMatchObject({
+      pending: 0,
+      updates: [{ id: 's1', state: 'rejected', error: 'HTTP 400 — course "react-2023" is not a JS Journey course' }],
+    });
+
+    expect((await request(port, 'POST', '/api/journey/mansi/outbox/retry', { body: '{}' })).status).toBe(403);
+    expect((await request(port, 'POST', '/api/journey/mansi/outbox/retry', jsonBody({ ids: 'all' }))).status).toBe(400);
+    expect((await request(port, 'POST', '/api/journey/mansi/outbox/retry', jsonBody({ ids: [''] }))).status).toBe(400);
+    expect((await request(port, 'POST', '/api/journey/nobody/outbox/retry', jsonBody({}))).status).toBe(404);
+    stub.setReply(() => ({ status: 201, body: {} }));
+    const retried = await request(port, 'POST', '/api/journey/mansi/outbox/retry', jsonBody({ ids: ['s1'] }));
+    expect(retried.status).toBe(202);
+    expect(retried.json()).toMatchObject({ pending: 1, updates: [{ id: 's1', state: 'queued' }] });
+    const delivered = await request(port, 'GET', '/api/journey/mansi/outbox?wait=3000');
+    expect(delivered.json()).toMatchObject({ pending: 0, lastError: null, updates: [{ id: 's1', state: 'delivered' }] });
+    // an empty body retries all
+    expect((await request(port, 'POST', '/api/journey/mansi/outbox/retry', { headers: { 'x-course-player': '1' } })).status).toBe(202);
+
+    for (const bad of ['-1', '10001', 'soon', '1.5']) {
+      expect((await request(port, 'GET', `/api/journey/mansi/outbox?wait=${bad}`)).status).toBe(400);
+    }
   });
 
   it('proxies status and queues + delivers sessions for a connected profile', async () => {
@@ -234,8 +312,8 @@ describe('JS Journey routes', () => {
     const posted = await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody(session('s1')));
     expect(posted.status).toBe(202);
     // answered once it is saved: delivery runs after the reply (server/journey.ts queue())
-    expect(posted.json()).toEqual({ pending: 1, lastError: null } satisfies OutboxState);
-    expect(await app.journey.settled('mansi')).toEqual({ pending: 0, lastError: null });
+    expect(posted.json()).toMatchObject({ pending: 1, lastError: null } satisfies Partial<OutboxState>);
+    expect(await app.journey.settled('mansi')).toMatchObject({ pending: 0, lastError: null });
     expect(stub.seen.at(-1)).toMatchObject({ method: 'POST', url: '/api/player/sessions', auth: `Bearer ${TOKEN}` });
 
     const invalid = await request(port, 'POST', '/api/journey/mansi/sessions', jsonBody({ ...session('s2'), minutes: 0 }));
@@ -254,7 +332,7 @@ describe('JS Journey routes', () => {
     // the note-only 202 does not wait for its delivery: read the outbox once it ran (it raced → pending 1)
     await app.journey.settled('mansi');
     const outbox = await request(port, 'GET', '/api/journey/mansi/outbox');
-    expect(outbox.json()).toEqual({ pending: 0, lastError: null });
+    expect(outbox.json()).toMatchObject({ pending: 0, lastError: null });
   });
 });
 
@@ -318,7 +396,7 @@ describe('JS Journey v2 routes: feed, read receipts, progress', () => {
     expect(notUuid.status).toBe(400);
     const res = await request(port, 'POST', '/api/journey/mansi/feed/read', jsonBody({ ids: [M_REPLY, M_REPLY] }));
     expect(res.status).toBe(202);
-    expect(res.json()).toEqual({ pending: 0, lastError: null } satisfies OutboxState);
+    expect(res.json()).toMatchObject({ pending: 0, lastError: null } satisfies Partial<OutboxState>);
     await settled();
     expect(stub.seen.map((s) => [s.method, s.url, s.body])).toEqual([['POST', '/api/player/feed/read', JSON.stringify({ ids: [M_REPLY] })]]);
   });

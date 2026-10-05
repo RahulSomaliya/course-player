@@ -44,9 +44,10 @@ afterEach(() => cleanup());
 describe('scanCourse', () => {
   it('builds sections, lectures, resources and totals from the folder tree', async () => {
     const { log } = memoryLog();
-    const { course } = await scanCourse({ root, dataDir, title: null, subtitle: null, log });
+    const { course } = await scanCourse({ root, dataDir, courseId: 'test-2024', title: null, subtitle: null, log });
 
-    expect(course.id).toBe('test-course-2024');
+    // the RESOLVED id (server/course-id.ts), never the folder slug "test-course-2024" (2026-10-05 incident)
+    expect(course.id).toBe('test-2024');
     expect(course.title).toBe('Test Course 2024');
     expect(course.subtitle).toBeNull();
     expect(course.sections.map((s) => s.id)).toEqual(['01', '02', '03']);
@@ -87,14 +88,14 @@ describe('scanCourse', () => {
 
   it('uses the configured title/subtitle when given', async () => {
     const { log } = memoryLog();
-    const { course } = await scanCourse({ root, dataDir, title: 'The Course', subtitle: 'Someone · 2024', log });
+    const { course } = await scanCourse({ root, dataDir, courseId: 'test-2024', title: 'The Course', subtitle: 'Someone · 2024', log });
     expect(course.title).toBe('The Course');
     expect(course.subtitle).toBe('Someone · 2024');
   });
 
   it('logs skipped duplicates/empty sections and a summary line', async () => {
     const { log, lines } = memoryLog();
-    await scanCourse({ root, dataDir, title: null, subtitle: null, log });
+    await scanCourse({ root, dataDir, courseId: 'test-2024', title: null, subtitle: null, log });
     expect(lines).toContain('[scan] skipped "03 Zz Duplicate Number": section 03 already exists');
     expect(lines).toContain('[scan] skipped "04 Empty Section": no lectures');
     expect(lines).toContain('[scan] 3 sections, 6 lectures, 4 videos, 0.1 h (4 cache misses)');
@@ -102,10 +103,10 @@ describe('scanCourse', () => {
 
   it('caches durations in <data>/durations.json and reuses them on the next scan', async () => {
     const { log } = memoryLog();
-    expect((await scanCourse({ root, dataDir, title: null, subtitle: null, log })).misses).toBe(4);
+    expect((await scanCourse({ root, dataDir, courseId: 'test-2024', title: null, subtitle: null, log })).misses).toBe(4);
     const cache = JSON.parse(await readFile(path.join(dataDir, 'durations.json'), 'utf8')) as Record<string, { duration: number }>;
     expect(cache['01 Welcome/01 Intro.mp4']?.duration).toBeCloseTo(60);
-    const again = await scanCourse({ root, dataDir, title: null, subtitle: null, log });
+    const again = await scanCourse({ root, dataDir, courseId: 'test-2024', title: null, subtitle: null, log });
     expect(again.misses).toBe(0);
     expect(again.course.totals.duration).toBeCloseTo(225);
   });

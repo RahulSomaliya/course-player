@@ -6,13 +6,15 @@ import path from 'node:path';
 import type { Course, Lecture, Resource, Section } from '../shared/types.ts';
 import { errorMessage, type Log } from './log.ts';
 import { isDurationCache, resolveDurations, type DurationCache, type VideoFile } from './mp4.ts';
-import { mediaHref, parseFileName, parseRedirectUrl, parseSectionName, slugify, type FileExt } from './names.ts';
+import { mediaHref, parseFileName, parseRedirectUrl, parseSectionName, type FileExt } from './names.ts';
 import { JsonFileError, readJsonFile, writeFileAtomic } from './store.ts';
 
 export interface ScanOptions {
   root: string;
   /** holds durations.json */
   dataDir: string;
+  /** Course.id, resolved by course-id.ts — never derived from the folder name here (2026-10-05 incident) */
+  courseId: string;
   /** from config.json; null -> the folder name */
   title: string | null;
   subtitle: string | null;
@@ -36,10 +38,6 @@ interface PendingResource {
 const REDIRECT_PEEK_BYTES = 64 * 1024;
 
 const byName = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
-
-export function courseIdFor(root: string): string {
-  return slugify(path.basename(path.resolve(root)));
-}
 
 async function readHead(file: string, bytes: number): Promise<string> {
   const fh = await open(file, 'r');
@@ -191,7 +189,7 @@ export async function scanCourse(opts: ScanOptions): Promise<ScanResult> {
 
   return {
     course: {
-      id: courseIdFor(root),
+      id: opts.courseId,
       title: opts.title ?? path.basename(path.resolve(root)),
       subtitle: opts.subtitle,
       sections,
