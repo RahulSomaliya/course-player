@@ -5,8 +5,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BootPayload, JourneySession, ProgressState } from '../../../shared/types';
 import { emptyProgress } from '../lib/progress';
+import { newSession } from '../lib/session';
 import { sampleCourse } from '../lib/test-fixtures';
 import { progressKey } from '../state/progress';
+import { studyKey } from '../state/study';
 import { App } from './App';
 
 // React 19 act() environment flag; jsdom has no type for it on globalThis.
@@ -26,7 +28,7 @@ const ssdCopy: ProgressState = {
   days: { '2026-09-30': 5400 },
 };
 
-let boot: BootPayload = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: false }], version: 'test' };
+let boot: BootPayload = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: false }], version: 'test', courseIdFrom: 'course.json', folderCourseId: course.id };
 const json = (body: unknown): Response => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
 /** Stubs the course server; GET /api/progress/mansi answers when `progress` resolves. `calls` = every
@@ -48,9 +50,11 @@ function stubServer(progress: Promise<ProgressState>): { puts: ProgressState[]; 
       }
       calls.push(`${method} ${url}`);
       if (url === '/api/journey/mansi/sessions') {
-        sessions.push(JSON.parse(String(init?.body)) as JourneySession);
-        return json({ pending: 1, lastError: null });
+        const session = JSON.parse(String(init?.body)) as JourneySession;
+        sessions.push(session);
+        return json({ pending: 1, lastError: null, updates: [{ id: session.id, state: 'queued', at: session.endedAt, error: null, session }] });
       }
+      if (url.startsWith('/api/journey/mansi/outbox')) return json({ pending: 0, lastError: null, updates: [] });
       if (url === '/api/profiles/mansi/journey' && method === 'PUT') return json({ id: 'mansi', name: 'Mansi', journeyConnected: true });
       return new Response(null, { status: 204 });
     }),
@@ -75,7 +79,7 @@ async function mount(ms: number): Promise<HTMLElement> {
 }
 
 afterEach(() => {
-  boot = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: false }], version: 'test' };
+  boot = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: false }], version: 'test', courseIdFrom: 'course.json', folderCourseId: course.id };
   window.location.hash = '';
   if (root !== null) act(() => root?.unmount());
   root = null;
@@ -122,66 +126,88 @@ describe('<App/> boot at #/watch/<id> with no local progress', () => {
 });
 
 describe('<App/> v2: one learner', () => {
-  it('opens straight to her home — no "Who\'s studying?", Sign off in the header', async () => {
+  it('opens straight to her home — no "Who\'s studying?", Start studying in the header (v3)', async () => {
     stubServer(Promise.resolve(ssdCopy));
     const el = await mount(50);
     expect(el.textContent).not.toContain('Who’s studying?');
-    expect(el.querySelector('[data-control="sign-off"]')?.textContent).toContain('Sign off');
+    expect(el.querySelector('[data-control="start-studying"]')?.textContent).toContain('Start studying');
+    expect(el.querySelector('[data-control="sign-off"]')).toBeNull();
     expect(el.querySelector('[data-control="continue"]')).not.toBeNull();
-  });
-
-  it('the next open after closing without signing off asks for that session\'s note', async () => {
-    boot = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: true }], version: 'test' };
-    stubServer(Promise.resolve(ssdCopy));
-    const tue = new Date(Date.now() - 2 * 86_400_000);
-    tue.setHours(19, 0, 0, 0);
-    localStorage.setItem(
-      `cp:${course.id}:mansi:session`,
-      JSON.stringify({
-        id: 'earlier',
-        startedAt: tue.getTime(),
-        lastStudyAt: tue.getTime() + 72 * 60_000,
-        seconds: 72 * 60,
-        sectionSeconds: { 3: 72 * 60 },
-        lecturesCompleted: [],
-        finishedSections: [],
-      }),
-    );
-    await mount(80);
-    const card = document.querySelector('[role="dialog"]');
-    expect(card?.textContent).toMatch(/You studied 1h 12m (yesterday|on \w{3})/);
-    expect(card?.textContent).toContain('Add a note for Rahul?');
-    expect(document.querySelector('[data-control="sign-off"] [data-waiting]')).not.toBeNull();
   });
 });
 
-describe('<App/> v2: the 24 h rule at open', () => {
-  // Review 2026-10-01 (high): resume() started the auto-close POST while the session stayed in
-  // `pending`, so the at-open card asked about it too and dropped the note she typed. And it ran before
-  // hydrate, so the update's snapshot came from this browser's (here: empty) copy, not the SSD's.
-  it('a session she skipped that is now over 24 h old is sent for her — from the SSD progress — and the card does not ask', async () => {
-    boot = { course, profiles: [{ id: 'mansi', name: 'Mansi', journeyConnected: true }], version: 'test' };
+describe('<App/> v3: the study timer', () => {
+  it('Start studying → the header chip; its name says both "Sign off" and the time', async () => {
+    stubServer(Promise.resolve(ssdCopy));
+    const el = await mount(50);
+    await act(async () => {
+      el.querySelector<HTMLButtonElement>('[data-control="start-studying"]')?.click();
+      await tick(0);
+    });
+    const chip = el.querySelector('[data-control="sign-off"]');
+    expect(chip?.getAttribute('aria-label')).toBe('Sign off — studying for less than 1 min');
+    expect(chip?.textContent).toContain('<1m');
+    expect(el.querySelector('[data-control="start-studying"]')).toBeNull();
+    expect(el.querySelector('[data-control="start-studying-hero"]')).toBeNull();
+  });
+
+  it('a timer started before a reload / restart is still running at the next open', async () => {
+    stubServer(Promise.resolve(ssdCopy));
+    localStorage.setItem(studyKey(course.id, 'mansi'), JSON.stringify(newSession('kept', Date.now() - 83 * 60_000, false)));
+    const el = await mount(50);
+    expect(el.querySelector('[data-control="sign-off"]')?.getAttribute('aria-label')).toBe('Sign off — studying for 1 h 23 min');
+  });
+
+  it('opening an article lecture with no timer starts it, with the quiet notice', async () => {
+    stubServer(Promise.resolve(ssdCopy));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined); // jsdom: scrollTo not implemented
+    const article = course.sections[1]?.lectures[1]?.id as string;
+    window.location.hash = `#/watch/${encodeURIComponent(article)}`;
+    const el = await mount(50);
+    expect(el.querySelector('[data-control="sign-off"]')).not.toBeNull();
+    expect(el.querySelector('[data-notice="timer-started"]')?.textContent).toBe('Study timer started');
+  });
+
+  it('Quit with the timer running opens the card as "Send & quit"', async () => {
+    stubServer(Promise.resolve(ssdCopy));
+    localStorage.setItem(studyKey(course.id, 'mansi'), JSON.stringify(newSession('kept', Date.now() - 30 * 60_000, false)));
+    const el = await mount(50);
+    await act(async () => {
+      el.querySelector<HTMLButtonElement>('[aria-label="Quit the course player"]')?.click();
+      await tick(0);
+    });
+    expect(document.querySelector('[data-control="signoff-primary"]')?.textContent).toBe('Send & quit');
+  });
+});
+
+describe('<App/> v3: v2 study state left in this browser', () => {
+  // 2026-10-05: nothing is dropped silently. A v2 session (under the old FOLDER course id too) is sent
+  // once at open, as recorded — with the SSD copy's snapshot, not this browser's empty one — and no
+  // card asks about it.
+  it('is sent once at open (autoClosed), from the SSD progress, under the old folder id too', async () => {
+    boot = { ...boot, folderCourseId: 'react-course' };
     const { sessions } = stubServer(Promise.resolve(ssdCopy));
-    const tue = new Date(Date.now() - 3 * 86_400_000);
+    const tue = new Date(Date.now() - 3 * 86_400_000).getTime();
     localStorage.setItem(
-      `cp:${course.id}:mansi:pending`,
+      'cp:react-course:mansi:pending',
       JSON.stringify([
         {
           id: 'skipped-tue',
-          startedAt: tue.getTime(),
-          lastStudyAt: tue.getTime() + 72 * 60_000,
+          startedAt: tue,
+          lastStudyAt: tue + 72 * 60_000,
           seconds: 72 * 60,
           sectionSeconds: { 3: 72 * 60 },
           lecturesCompleted: [],
           finishedSections: [],
-          skippedAt: tue.getTime() + 86_400_000,
+          skippedAt: tue + 86_400_000,
         },
       ]),
     );
     await mount(80);
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(sessions.map((s) => [s.id, s.autoClosed])).toEqual([['skipped-tue', true]]);
+    expect(sessions.map((s) => [s.id, s.minutes, s.autoClosed, s.course])).toEqual([['skipped-tue', 72, true, course.id]]);
     expect(sessions[0]?.progress?.lecturesDone).toBe(1); // the SSD copy (ids[0] done), not the empty local one
+    expect(localStorage.getItem('cp:react-course:mansi:pending')).toBeNull();
   });
 });
 
@@ -191,7 +217,8 @@ describe('<App/> v2: connecting JS Journey', () => {
   it('fetches her plan + feed and pushes her snapshot at once', async () => {
     const { calls } = stubServer(Promise.resolve(ssdCopy));
     await mount(50);
-    expect(calls.filter((c) => c.includes('/api/journey/'))).toEqual([]);
+    // nothing that reaches JS Journey before she connects (the LOCAL outbox is read either way — v3)
+    expect(calls.filter((c) => c.includes('/api/journey/') && !c.includes('/outbox'))).toEqual([]);
     await act(async () => {
       document.querySelector<HTMLButtonElement>('[aria-label="Settings — theme and JS Journey"]')?.click();
       await tick(0);

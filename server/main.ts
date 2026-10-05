@@ -85,13 +85,14 @@ async function main(): Promise<number | null> {
   const url = `http://localhost:${bound}/`;
   log(`[server] Course Player ${VERSION} at ${url}`);
   log(`[server] course: ${root}`);
+  log(`[server] id:     ${app.courseId.id} (from ${app.courseId.from === 'folder' ? 'the folder name — a guess' : app.courseId.from})`);
   log(`[server] data:   ${dataDir}`);
   const webBuilt = await access(path.join(webDir, 'index.html')).then(
     () => true,
     () => false,
   );
   log(`[server] web:    ${webDir}${webBuilt ? '' : ' (not built — / shows a note)'}`);
-  app.journey.start();
+  void app.journey.start(); // never rejects: start-up delivery failures are logged inside
   if (open) openBrowser(url);
 
   // Closing the Terminal window sends SIGHUP; Ctrl-C sends SIGINT. Both get the same bounded

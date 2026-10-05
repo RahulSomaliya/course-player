@@ -1,11 +1,13 @@
 // Small response/request helpers shared by the route handlers.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-/** A failure with the status code + short message the client should see. Internals stay in the log. */
+/** A failure with the status code + short message the client should see. Internals stay in the log.
+ *  `body` = extra typed fields sent next to `error` (a JourneyProblem's `problem` + `courseId`). */
 export class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly body: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -36,8 +38,9 @@ export function sendEmpty(res: ServerResponse, status: number, headers: Record<s
   res.end();
 }
 
-/** Reads and parses a JSON body; 413 above `limit` bytes, 400 for invalid JSON. */
-export async function readJsonBody(req: IncomingMessage, limit: number): Promise<unknown> {
+/** Reads and parses a JSON body; 413 above `limit` bytes, 400 for invalid JSON. `allowEmpty`: an empty
+ *  body reads as undefined instead of a 400 (a route whose body is optional). */
+export async function readJsonBody(req: IncomingMessage, limit: number, opts: { allowEmpty?: boolean } = {}): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req as AsyncIterable<Buffer>) {
@@ -48,6 +51,7 @@ export async function readJsonBody(req: IncomingMessage, limit: number): Promise
   }
   if (size > limit) throw new HttpError(413, `Body is larger than ${limit} bytes`);
   const text = Buffer.concat(chunks).toString('utf8');
+  if (opts.allowEmpty === true && text.trim() === '') return undefined;
   try {
     return JSON.parse(text) as unknown;
   } catch {

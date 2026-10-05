@@ -5,7 +5,12 @@
 // PUT progress. Fixture: a week of her updates (relative to today), 2 unread replies quoting her
 // notes, 1 unread standalone note, status with sectionDue / skippedSections / planBreak null.
 // The "diwali" variant sends the break (1–15 Nov 2026); QA fakes the browser clock into it.
-// QA helpers (no auth): GET /__stub/state, POST /__stub/reset, POST /__stub/variant {variant}.
+// v3 (docs/spec-v3-study-timer.md): status carries `plan` (the coach page's rows) + the plan calendar;
+// an unknown course answers 404 "unknown course" like JS Journey (the player matches that text); and
+// POST /__stub/reject {on: true} makes POST sessions refuse every update that way (the "Didn't reach
+// Rahul · Try again" path) until {on: false}.
+// QA helpers (no auth): GET /__stub/state, POST /__stub/reset, POST /__stub/variant {variant},
+// POST /__stub/reject {on}.
 // Never point this at real data: everything lives in memory and is gone when it stops.
 import http from 'node:http';
 
@@ -20,6 +25,8 @@ const COURSE = 'react-2023';
 /** a small page so "See all" / "Show more" have something to page through */
 const PAGE = 6;
 let variant = arg('variant', 'normal');
+/** POST /__stub/reject {on}: every update is refused (404 unknown course) — the rejected path */
+let rejectSessions = false;
 
 const SECTION_TITLES = {
   1: 'Welcome, Welcome, Welcome!', 2: 'React Fundamentals', 3: 'A First Look at React', 4: 'Review of Essential JavaScript for React',
@@ -50,6 +57,22 @@ const DUE_BY_WEEK = [
 ];
 const sectionDue = Object.fromEntries(DUE_BY_WEEK.flatMap(([due, sections]) => sections.map((n) => [String(n), due])));
 
+const DIWALI = { start: '2026-11-01', end: '2026-11-15' };
+
+/** JS Journey lib/journey-view.ts planRows, roughly: each week's goal = its last section, the break in
+ *  place. `current` = the plan week the variant is in. */
+function plan(current) {
+  const rows = [];
+  DUE_BY_WEEK.forEach(([due, sections], i) => {
+    const week = i + 1;
+    if (due > DIWALI.end && !rows.some((r) => r.kind === 'break')) rows.push({ kind: 'break', label: 'Diwali', ...DIWALI, now: variant === 'diwali' });
+    const last = sections[sections.length - 1];
+    const state = week < current ? 'done' : week === current ? 'current' : 'upcoming';
+    rows.push({ kind: 'week', week, due, goal: `§${last} ${SECTION_TITLES[last]}`, state });
+  });
+  return rows;
+}
+
 function status() {
   const base = {
     targetDate: '2026-12-25',
@@ -58,6 +81,8 @@ function status() {
     coachNote: null,
     sectionDue,
     skippedSections: [4],
+    studyWeekdays: [1, 2, 3, 4, 5],
+    planBreaks: [{ label: 'Diwali break', ...DIWALI }],
   };
   if (variant === 'diwali') {
     return {
@@ -67,6 +92,7 @@ function status() {
       week: 5,
       goal: { sectionNumber: 19, title: SECTION_TITLES[19], due: '2026-11-20' },
       planBreak: { label: 'Diwali break', start: '2026-11-01', end: '2026-11-15' },
+      plan: plan(5),
     };
   }
   return {
@@ -76,6 +102,7 @@ function status() {
     week: 1,
     goal: { sectionNumber: 7, title: SECTION_TITLES[7], due: '2026-10-09' },
     planBreak: null,
+    plan: plan(1),
   };
 }
 
@@ -244,16 +271,21 @@ const server = http.createServer(async (req, res) => {
     if (route === 'GET /__stub/state') return send(res, 200, { variant, sessions: db.sessions, reads: db.reads, progress: db.progress });
     if (route === 'POST /__stub/reset') {
       reset();
+      rejectSessions = false;
       return send(res, 200, { ok: true });
     }
     if (route === 'POST /__stub/variant') {
       variant = (await readBody(req))?.variant === 'diwali' ? 'diwali' : 'normal';
       return send(res, 200, { variant });
     }
+    if (route === 'POST /__stub/reject') {
+      rejectSessions = (await readBody(req))?.on === true;
+      return send(res, 200, { rejectSessions });
+    }
     if (req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'invalid token' });
 
     if (route === 'GET /api/player/status') {
-      if (url.searchParams.get('course') !== COURSE) return send(res, 400, { error: 'unknown course' });
+      if (url.searchParams.get('course') !== COURSE) return send(res, 404, { error: 'unknown course' });
       return send(res, 200, status());
     }
     if (route === 'GET /api/player/feed') {
@@ -270,7 +302,8 @@ const server = http.createServer(async (req, res) => {
     }
     if (route === 'POST /api/player/sessions') {
       const s = await readBody(req);
-      if (!s || s.course !== COURSE || typeof s.id !== 'string') return send(res, 400, { error: 'bad session' });
+      if (rejectSessions || s?.course !== COURSE) return send(res, 404, { error: 'unknown course' });
+      if (!s || typeof s.id !== 'string') return send(res, 400, { error: 'bad session' });
       db.sessions.push(s);
       if (!db.updates.some((u) => u.id === s.id)) db.updates.unshift(toUpdate(s));
       if (s.progress && (!db.progress || s.progress.takenAt > db.progress.takenAt)) db.progress = s.progress;

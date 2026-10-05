@@ -18,6 +18,30 @@ export function formatDuration(seconds: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
+/** The running study timer: "<1m" · "12m" · "1h 23m" (header chip, sign-off card). */
+export function formatElapsed(seconds: number): string {
+  return seconds < 60 ? '<1m' : formatDuration(seconds);
+}
+
+/** formatElapsed for a screen reader: "less than 1 min" · "12 min" · "1 h 23 min". */
+export function formatSpokenDuration(seconds: number): string {
+  const minutes = Math.floor(Math.max(0, seconds) / 60);
+  if (minutes === 0) return 'less than 1 min';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m} min`;
+  return m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+
+/** Local time of day, 12 h: "9:14 am" · "9:05 pm" · "12:00 am". Every clock time in the app goes through
+ *  here — Rahul: never 24 h (2026-10-05). Built by hand, not Intl: its day-period text ("pm" / "PM" / "p.m.")
+ *  differs between ICU versions. JS Journey's lib/format.ts fmtTime prints the same shape. */
+export function formatTimeOfDay(ms: number): string {
+  const d = new Date(ms);
+  const h = d.getHours();
+  return `${h % 12 === 0 ? 12 : h % 12}:${String(d.getMinutes()).padStart(2, '0')} ${h < 12 ? 'am' : 'pm'}`;
+}
+
 /** "Tue 29 Sep" */
 export function formatDay(key: string): string {
   const { day, month } = dayAndMonth(key);
@@ -34,11 +58,11 @@ export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-/** When Rahul wrote a message: "Today 21:05" · "Yesterday 07:00" · "Sat 18:30" · "Tue 22 Sep". */
+/** When Rahul wrote a message: "Today 9:05 pm" · "Yesterday 7:00 am" · "Sat 6:30 pm" · "Tue 22 Sep". */
 export function formatMessageTime(iso: string, today: string): string {
   const d = new Date(iso);
   const key = localDateKey(d);
-  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const time = formatTimeOfDay(d.getTime());
   const ago = daysBetween(key, today);
   if (ago <= 0) return `Today ${time}`;
   if (ago === 1) return `Yesterday ${time}`;

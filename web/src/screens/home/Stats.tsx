@@ -12,6 +12,7 @@ import { useSeenOnce } from '../../lib/motion';
 import { completion, streak, studiedOn, studyCalendar } from '../../lib/stats';
 import { activeBreak, dueStat } from '../../lib/week';
 import { useProgress } from '../../state/progress';
+import { useStudyDays } from '../../state/study';
 
 const pctLabel = (pct: number): string => (pct > 0 && pct < 1 ? '<1%' : `${Math.floor(pct)}%`);
 const days = (n: number): string => {
@@ -21,7 +22,8 @@ const days = (n: number): string => {
 
 export function Stats({ status, intro }: { status: JourneyStatus | null; intro: boolean }) {
   const { course } = useApp();
-  const daysStudied = useProgress((s) => s.days);
+  // + the running timer (display only — days are written at sign-off, state/study.ts)
+  const daysStudied = useStudyDays();
   const lectures = useProgress((s) => s.lectures);
   const today = todayKey();
   const done = useMemo(() => completion(course, lectures), [course, lectures]);

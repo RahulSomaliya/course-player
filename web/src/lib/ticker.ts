@@ -1,4 +1,6 @@
-// Study time (spec "Study time"): a 1 s ticker adds wall-clock seconds while the learner is studying.
+// WHERE she studies: a 1 s ticker counts seconds while a lecture plays (or an article is read). v3
+// (docs/spec-v3-study-timer.md A3): it only picks the update's section (StudySession.sectionSeconds) —
+// it no longer decides HOW LONG (the wall-clock timer does) and never writes ProgressState.days.
 // Deltas come from performance.now() (monotonic; immune to clock changes) and each tick is capped at
 // 5 s: a laptop that sleeps mid-video resumes with one huge delta, which must never become hours.
 

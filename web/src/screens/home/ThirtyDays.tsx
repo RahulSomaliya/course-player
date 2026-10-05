@@ -12,7 +12,7 @@ import { todayKey } from '../../lib/dates';
 import { formatDay, formatDuration, formatShortDate } from '../../lib/format';
 import { useSeenOnce } from '../../lib/motion';
 import { last30 } from '../../lib/stats';
-import { useProgress } from '../../state/progress';
+import { useStudyDays } from '../../state/study';
 
 /** Clean top of the scale: at least 1 h, then the next whole half hour (≤ 3 h) or hour. */
 function niceTop(seconds: number): number {
@@ -23,7 +23,8 @@ function niceTop(seconds: number): number {
 }
 
 export function ThirtyDays({ intro }: { intro: boolean }) {
-  const days = useProgress((s) => s.days);
+  // + the running timer (display only — days are written at sign-off, state/study.ts)
+  const days = useStudyDays();
   const today = todayKey();
   const { days: series, average } = useMemo(() => last30(days, today), [days, today]);
   const [active, setActive] = useState<number | null>(null);

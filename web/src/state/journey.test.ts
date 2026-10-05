@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CoachMessage, JourneyFeed, JourneyStatus, ProgressSnapshot, StudentUpdate } from '../../../shared/types';
+import type { CoachMessage, JourneyFeed, JourneySession, JourneyStatus, OutboxState, OutboxUpdate, ProgressSnapshot, StudentUpdate } from '../../../shared/types';
+import { ApiError } from '../lib/api';
 import type { KeyValueStore } from '../lib/storage';
 import { JourneyStore, SnapshotPusher, type JourneyApi } from './journey';
 
@@ -46,6 +47,28 @@ const feedWith = (replies: CoachMessage[], notes: CoachMessage[] = []): JourneyF
   nextCursor: null,
 });
 
+const EMPTY_OUTBOX: OutboxState = { pending: 0, lastError: null, updates: [] };
+const session = (id: string): JourneySession => ({
+  id,
+  course: 'react-2023',
+  startedAt: '2026-10-05T03:44:00.000Z',
+  endedAt: '2026-10-05T05:07:00.000Z',
+  studyDate: '2026-10-05',
+  minutes: 83,
+  sectionNumber: 7,
+  lecturesCompleted: [],
+  finishedSections: [],
+  mood: null,
+  note: 'props clicked',
+  stuck: false,
+  autoClosed: false,
+  progress: null,
+});
+const queued = (id: string): OutboxUpdate => ({ id, state: 'queued', at: '2026-10-05T05:07:00.000Z', error: null, session: session(id) });
+const rejected = (id: string): OutboxUpdate => ({ id, state: 'rejected', at: '2026-10-05T05:08:00.000Z', error: 'HTTP 404 — unknown course', session: session(id) });
+const delivered = (id: string): OutboxUpdate => ({ id, state: 'delivered', at: '2026-10-05T05:09:00.000Z', error: null });
+const outboxOf = (updates: OutboxUpdate[]): OutboxState => ({ pending: updates.filter((u) => u.state === 'queued').length, lastError: null, updates });
+
 function setup(opts: { storage?: ReturnType<typeof memoryStore>; api?: Partial<JourneyApi>; connected?: boolean | (() => boolean) } = {}) {
   const storage = opts.storage ?? memoryStore();
   let now = 1_000_000;
@@ -54,6 +77,8 @@ function setup(opts: { storage?: ReturnType<typeof memoryStore>; api?: Partial<J
     status: async () => status,
     feed: async () => ({ feed: feedWith([msg('r1'), msg('r2')], [msg('n1')]), stale: false }),
     read: async (ids) => void reads.push(ids),
+    outbox: async () => EMPTY_OUTBOX,
+    retry: async () => EMPTY_OUTBOX,
     ...opts.api,
   };
   const connected = opts.connected;
@@ -100,6 +125,18 @@ describe('JourneyStore', () => {
     const { studyWeekdays: _w, planBreaks: _p, ...older } = status;
     const storage = memoryStore({ 'cp:react-2023:mansi:status': JSON.stringify(older) });
     expect(setup({ storage }).store.get().status).toEqual({ ...status, studyWeekdays: [1, 2, 3, 4, 5], planBreaks: [] });
+  });
+
+  it('a cached plan (See full plan) of the wrong shape is dropped — the rest of the status stays', () => {
+    const plan = [{ kind: 'week', week: 1, due: '2026-10-09', goal: '§7 Thinking In React', state: 'current' }];
+    const good = memoryStore({ 'cp:react-2023:mansi:status': JSON.stringify({ ...status, plan }) });
+    expect(setup({ storage: good }).store.get().status?.plan).toEqual(plan);
+    for (const bad of ['x', [{ kind: 'week', week: '1' }], [{ kind: 'month' }]]) {
+      const storage = memoryStore({ 'cp:react-2023:mansi:status': JSON.stringify({ ...status, plan: bad }) });
+      const cached = setup({ storage }).store.get().status;
+      expect(cached?.week).toBe(1);
+      expect(cached?.plan).toBeUndefined();
+    }
   });
 
   it('a cached plan calendar of the wrong shape is treated as missing, never trusted', () => {
@@ -235,5 +272,116 @@ describe('SnapshotPusher (≤ 1 per 5 min; sign-off and Quit push at once)', () 
     await p.pushNow();
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(puts).toHaveLength(0);
+  });
+});
+
+describe('JourneyStore v3: a course JS Journey does not know is a visible state (spec v3 A1)', () => {
+  const problem = { error: "JS Journey doesn't know the course 'react-course' — ask Rahul", problem: 'unknown-course' as const, courseId: 'react-course' };
+
+  it('status 409 + JourneyProblem → `problem` (the menu says "course not recognised"), the cached status stays', async () => {
+    const storage = memoryStore();
+    await setup({ storage }).store.refresh();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { store } = setup({ storage, api: { status: async () => Promise.reject(new ApiError(409, problem.error, problem)) } });
+    await store.refresh();
+    expect(store.get()).toMatchObject({ problem, status });
+    warn.mockRestore();
+  });
+
+  it('a good status clears it again; any other failure leaves it as it was', async () => {
+    let fail: Error | null = new ApiError(409, problem.error, problem);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { store } = setup({
+      api: {
+        status: async () => {
+          if (fail) throw fail;
+          return status;
+        },
+      },
+    });
+    await store.refresh();
+    expect(store.get().problem).toEqual(problem);
+    fail = new Error('offline');
+    await store.refresh();
+    expect(store.get().problem).toEqual(problem);
+    fail = null;
+    await store.refresh();
+    expect(store.get().problem).toBeNull();
+    warn.mockRestore();
+  });
+});
+
+describe('JourneyStore v3: her updates in the local outbox (spec v3 A2, A5, A6)', () => {
+  it('read on every refresh — connected or NOT (updates wait there until she connects)', async () => {
+    const outbox = vi.fn(async () => outboxOf([queued('q'), rejected('r'), delivered('d')]));
+    const { store } = setup({ connected: false, api: { outbox } });
+    await store.refresh();
+    expect(outbox).toHaveBeenCalled();
+    expect(store.get().outbox.map((u) => [u.id, u.state])).toEqual([
+      ['q', 'queued'],
+      ['r', 'rejected'],
+      ['d', 'delivered'],
+    ]);
+  });
+
+  it('an unreachable course server keeps the last list and says so in the console, never throws', async () => {
+    let down = false;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { store } = setup({
+      api: {
+        outbox: async () => {
+          if (down) throw new Error('server down');
+          return outboxOf([queued('q')]);
+        },
+      },
+    });
+    await store.refresh();
+    down = true;
+    await expect(store.refresh()).resolves.toBeUndefined();
+    expect(store.get().outbox.map((u) => u.id)).toEqual(['q']);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('noteOutbox: the 202 answer of a sign-off shows "Waiting to send" at once', () => {
+    const { store } = setup();
+    store.noteOutbox(outboxOf([queued('q')]));
+    expect(store.get().outbox.map((u) => u.id)).toEqual(['q']);
+  });
+
+  it('awaitDelivery: one GET outbox?wait= → delivered / still queued / rejected, and the list updates', async () => {
+    const waits: (number | undefined)[] = [];
+    let answer = outboxOf([delivered('a')]);
+    const { store } = setup({
+      api: {
+        outbox: async (waitMs) => {
+          waits.push(waitMs);
+          return answer;
+        },
+      },
+    });
+    await expect(store.awaitDelivery('a', 8000)).resolves.toEqual({ state: 'delivered' });
+    answer = outboxOf([rejected('a')]);
+    await expect(store.awaitDelivery('a', 8000)).resolves.toEqual({ state: 'rejected', error: 'HTTP 404 — unknown course' });
+    expect(store.get().outbox.map((u) => u.state)).toEqual(['rejected']);
+    expect(waits).toEqual([8000, 8000]);
+  });
+
+  it('Try again: re-queues that update, waits for the answer, and refreshes the feed when it went through', async () => {
+    const retried: string[][] = [];
+    const feed = vi.fn(async () => ({ feed: feedWith([]), stale: false }));
+    const { store } = setup({
+      api: {
+        retry: async (ids) => {
+          retried.push(ids);
+          return outboxOf([queued('r')]);
+        },
+        outbox: async () => outboxOf([delivered('r')]),
+        feed,
+      },
+    });
+    await expect(store.retry('r')).resolves.toEqual({ state: 'delivered' });
+    expect(retried).toEqual([['r']]);
+    expect(feed).toHaveBeenCalled();
   });
 });

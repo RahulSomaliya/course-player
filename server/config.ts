@@ -1,9 +1,11 @@
-// <data>/config.json: course title/subtitle + profiles (+ a profile's JS Journey student link).
+// <data>/config.json: course title/subtitle + profiles (+ a profile's JS Journey student link), and an
+// optional `courseId` (v3: second in line after .player/course.json — server/course-id.ts).
 // Seeded by scripts/deploy.sh from scripts/seed-config.json only when absent; afterwards only the
 // server writes it (atomically). The student link contains the token: it never leaves this module
 // except through journeyLink() for server-side calls — the browser only sees `journeyConnected`.
 import path from 'node:path';
 import type { Profile } from '../shared/types.ts';
+import { isCourseId } from './course-id.ts';
 import { KeyedMutex, readJsonFile, writeFileAtomic } from './store.ts';
 
 /** Profile ids name files (progress-<id>.json), so they stay filename- and URL-safe. */
@@ -19,6 +21,7 @@ interface ProfileEntry {
 interface ConfigFile {
   title?: string;
   subtitle?: string | null;
+  courseId?: string;
   profiles: ProfileEntry[];
   [key: string]: unknown;
 }
@@ -34,6 +37,7 @@ function parseConfig(raw: unknown, file: string): ConfigFile {
   if (!isRecord(raw)) return fail('must be a JSON object');
   if (raw.title !== undefined && typeof raw.title !== 'string') fail('title must be a string');
   if (raw.subtitle !== undefined && raw.subtitle !== null && typeof raw.subtitle !== 'string') fail('subtitle must be a string or null');
+  if (raw.courseId !== undefined && !isCourseId(raw.courseId)) fail('courseId must be a course id like "react-2023"');
   const profiles = raw.profiles ?? [];
   if (!Array.isArray(profiles)) return fail('profiles must be an array');
   const seen = new Set<string>();
@@ -73,6 +77,11 @@ export class ConfigStore {
 
   get subtitle(): string | null {
     return this.data.subtitle ?? null;
+  }
+
+  /** null = not set (every v1/v2 config.json); resolution order in course-id.ts */
+  get courseId(): string | null {
+    return this.data.courseId ?? null;
   }
 
   has(profileId: string): boolean {

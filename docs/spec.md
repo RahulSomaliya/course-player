@@ -71,7 +71,7 @@ Routes:
 | `DELETE /api/profiles/:profile/journey` | forget the link |
 | `GET /api/journey/:profile/status` | proxy `GET <journeyUrl>/api/player/status?course=<course.id>` with `Authorization: Bearer <token>`, 5 s timeout → `JourneyStatus`; 204 if not connected / unreachable / non-2xx |
 | `POST /api/journey/:profile/sessions` | validate a `JourneySession` (at least as strict as JS Journey: a 4xx there drops it); append to the outbox file; reply 202 `OutboxState` as soon as it is saved, then flush in the background (never await JS Journey before replying) |
-| `GET /api/journey/:profile/outbox` | `OutboxState` |
+| `GET /api/journey/:profile/outbox` | `OutboxState` (v3: + per-update delivery state, `?wait=`, `POST …/outbox/retry` — `docs/spec-v3-study-timer.md` A2, `shared/types.ts`) |
 | `POST /api/quit` | reply 202, flush outboxes (max 3 s), close, exit 0 |
 | `GET /media/<path>` | stream a course file (below) |
 | `GET /*` | static files from the web dir; unknown paths → `index.html`; `/assets/*` immutable cache, `index.html` no-cache |
@@ -79,8 +79,9 @@ Routes:
 The token never reaches the browser (`Profile.journeyConnected` is all the web app learns).
 
 **Outbox → JS Journey.** `POST <journeyUrl>/api/player/sessions`, `Authorization: Bearer <token>`,
-body `JourneySession`. 2xx → remove. 4xx → remove too and keep the message in `lastError` (a permanent
-rejection must not retry forever). Network error → keep and stop the flush; 5xx → keep that item and the
+body `JourneySession`. 2xx → remove. 4xx → out of the queue, message in `lastError` (a permanent
+rejection must not retry forever) — v3: her update is KEPT as `rejected` and re-queued on start / connect /
+"Try again" (`docs/spec-v3-study-timer.md` A2). Network error → keep and stop the flush; 5xx → keep that item and the
 rest of its kind, still deliver the other kinds (read receipts, snapshot). Retried on start-up, every
 5 min, on each new item, and on quit. Dedup is JS Journey's job (by `session.id`), so retries are safe.
 
@@ -93,7 +94,8 @@ and is stripped from the title. `^Part (\d+) - (.+?)(?: \((\d+) Projects?\))?$` 
   `.pdf` → `{kind:'pdf', href:'/media/…'}`; any other `.html` → `{kind:'link', href:'/media/…'}`.
   A resource whose lecture is missing attaches to the nearest earlier lecture (never dropped).
 - Course title/subtitle come from `config.json` (`"The Ultimate React Course"`, `"Jonas Schmedtmann · 2023"`),
-  falling back to the folder name. `course.id` = slug of the folder name (`react-2023`).
+  falling back to the folder name. `course.id` = slug of the folder name (`react-2023`) — v3: pinned in
+  `.player/course.json` instead, the folder slug is a logged last resort (`docs/spec-v3-study-timer.md` A1).
 
 **Durations**: read the `mvhd` box inside the top-level `moov` box (seek box headers; never read `mdat`;
 handle 64-bit box sizes and `mvhd` v0/v1). Cache in `durations.json` keyed by relpath and invalidated by

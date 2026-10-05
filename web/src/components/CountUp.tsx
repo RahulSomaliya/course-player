@@ -9,7 +9,7 @@ const DURATION_MS = 700;
 const easeOutCubic = (t: number): number => 1 - (1 - t) ** 3;
 
 export function CountUp({ value, format, animate, play = true }: { value: number; format: (n: number) => string; animate: boolean; play?: boolean }) {
-  // Only the value present at mount animates; later changes (the study ticker) just update.
+  // Only the value present at mount animates; later changes (the running study timer) just update.
   const [from] = useState(() => (animate && !prefersReducedMotion() ? 0 : null));
   const [shown, setShown] = useState<number | null>(from);
 
@@ -28,8 +28,8 @@ export function CountUp({ value, format, animate, play = true }: { value: number
     };
     frame = requestAnimationFrame(step);
     return () => cancelAnimationFrame(frame);
-    // Deliberately not on `value`: it counts once, towards the value when it starts (the ticker changes
-    // Today every second while she studies — re-counting from 0 each time would be noise).
+    // Deliberately not on `value`: it counts once, towards the value when it starts (the running timer
+    // changes Today every 15 s while she studies — re-counting from 0 each time would be noise).
   }, [from, play]);
 
   if (shown === null) return <>{format(value)}</>;

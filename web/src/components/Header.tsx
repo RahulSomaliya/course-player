@@ -1,16 +1,19 @@
-// Header: course title (left; on Watch the back link) · Sign off · menu · Quit (right).
-// Sign off is always there: the live session time inside it while she studies ("Sign off · 42m"), a
-// small dot when a session waits for her note (idle 20 min, or an earlier sitting she closed the app on).
-import { Check, ChevronLeft, Link2, Monitor, Moon, Power, Settings2, Sun } from 'lucide-react';
+// Header: course title (left; on Watch the back link) · the study timer · menu · Quit (right).
+// The timer (components/StudyTimer.tsx, spec v3 A4): "Start studying" with no session; while one runs a
+// quiet "● 1h 23m" chip that reads "Sign off" on hover / focus. The menu holds theme, "Note to Rahul…"
+// (a note-only update) and JS Journey — whose row says "course not recognised" when JS Journey does not
+// know this copy's course id (JourneyStore.problem), never just "Connected".
+import { Check, ChevronLeft, CircleAlert, Link2, MessageSquare, Monitor, Moon, Power, Settings2, Sun } from 'lucide-react';
 import { useId, useRef, useState, type FormEvent } from 'react';
 import type { Prefs } from '../../../shared/types';
 import { useApp } from '../app/context';
 import { ApiError, connectJourney, disconnectJourney } from '../lib/api';
-import { formatDuration } from '../lib/format';
 import { withPrefs } from '../lib/progress';
 import { hrefFor } from '../lib/router';
+import { useJourney } from '../state/journey';
 import { useProgress, useProgressStore } from '../state/progress';
-import { useStudy, useStudyState } from '../state/study';
+import { useStudyState } from '../state/study';
+import { HeaderTimer } from './StudyTimer';
 import { Button, IconButton, useDismiss } from './ui';
 
 export function Header({ back = false }: { back?: boolean }) {
@@ -25,7 +28,7 @@ export function Header({ back = false }: { back?: boolean }) {
           {back && <span className="sr-only">— back to course home</span>}
         </a>
         <div className="ml-auto flex items-center gap-1 sm:gap-2">
-          <SignOffButton />
+          <HeaderTimer />
           <Menu />
           <QuitButton />
         </div>
@@ -34,46 +37,16 @@ export function Header({ back = false }: { back?: boolean }) {
   );
 }
 
-function SignOffButton() {
-  const { live, pending, waiting } = useStudyState();
-  const { openSignOff } = useApp();
-  const minutes = live !== null && live.seconds >= 60 ? formatDuration(live.seconds) : null;
-  const dot = pending.length > 0 || waiting;
-  const label = [
-    'Sign off',
-    minutes ? `${minutes} studied since your last sign-off` : null,
-    dot ? 'a session is waiting for your note' : null,
-  ]
-    .filter(Boolean)
-    .join(' — ');
-  return (
-    <button
-      type="button"
-      onClick={openSignOff}
-      aria-label={label}
-      data-control="sign-off"
-      className="relative inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-line bg-surface px-3 text-sm font-medium text-ink transition-[background-color] duration-150 ease-out hover:bg-fill"
-    >
-      Sign off
-      {minutes && <span className="tabular-nums text-ink-muted">· {minutes}</span>}
-      {/* static (no pulse, no colour transition): a state indicator screenshots must catch as it is */}
-      {dot && <span data-waiting aria-hidden="true" className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full bg-accent ring-2 ring-canvas" />}
-    </button>
-  );
-}
-
-/** Quit stops the server, and the Stopped page cannot start it again. With something unsigned, Quit
- *  opens the sign-off card ("Sign off & quit") — that card is the confirmation. Otherwise it asks once
+/** Quit stops the server, and the Stopped page cannot start it again. With the timer running, Quit
+ *  opens the sign-off card ("Send & quit") — that card is the confirmation. Otherwise it asks once
  *  (it sits next to the menu, and a misclick mid-lecture meant a trip to Finder). */
 function QuitButton() {
   const { quit } = useApp();
-  const study = useStudy();
-  useStudyState(); // re-render when hasUnsigned() changes
+  const unsigned = useStudyState().session !== null;
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   useDismiss(open, () => setOpen(false), [trigger, panel], trigger);
-  const unsigned = study.hasUnsigned();
   return (
     <div className="relative">
       <Button
@@ -116,6 +89,7 @@ const THEMES: { value: Prefs['theme']; label: string; Icon: typeof Sun }[] = [
 ];
 
 function Menu() {
+  const { openNote } = useApp();
   const store = useProgressStore();
   const theme = useProgress((s) => s.prefs.theme);
   const [open, setOpen] = useState(false);
@@ -126,12 +100,36 @@ function Menu() {
 
   return (
     <div className="relative">
-      <IconButton ref={trigger} label="Settings — theme and JS Journey" size="sm" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-haspopup="true">
+      {/* data-control: the sign-off card's "Note to Rahul…" returns focus here (its menu item is gone) */}
+      <IconButton
+        ref={trigger}
+        label="Settings — theme and JS Journey"
+        size="sm"
+        data-control="settings-menu"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="true"
+      >
         <Settings2 className="size-4" strokeWidth={1.5} />
       </IconButton>
       {open && (
         <div ref={panel} className="absolute right-0 top-10 z-40 w-[min(20rem,calc(100vw-2rem))] animate-pop-in rounded-lg border border-line bg-raised shadow-e2">
-          <div className="p-4">
+          <div className="p-2">
+            {/* a note-only update: something she studied away from the player (no time logged) */}
+            <button
+              type="button"
+              data-control="note-to-rahul"
+              onClick={() => {
+                setOpen(false);
+                openNote();
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-ink hover:bg-fill"
+            >
+              <MessageSquare className="size-4 text-ink-muted" strokeWidth={1.5} aria-hidden="true" />
+              Note to Rahul…
+            </button>
+          </div>
+          <div className="border-t border-line p-4">
             <p id={themeLabel} className="mb-2 text-xs font-medium text-ink-muted">
               Theme
             </p>
@@ -167,6 +165,7 @@ function Menu() {
 
 function JourneyRow() {
   const { profile, updateProfile } = useApp();
+  const { problem } = useJourney();
   const [editing, setEditing] = useState(false);
   const [link, setLink] = useState('');
   const [busy, setBusy] = useState(false);
@@ -180,10 +179,17 @@ function JourneyRow() {
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-medium text-ink">JS Journey</p>
-          <p className="mt-0.5 inline-flex items-center gap-1 text-sm text-ink-muted">
-            <Check className="size-3.5 text-accent" strokeWidth={2} aria-hidden="true" />
-            Connected
-          </p>
+          {problem === null ? (
+            <p className="mt-0.5 inline-flex items-center gap-1 text-sm text-ink-muted">
+              <Check className="size-3.5 text-accent" strokeWidth={2} aria-hidden="true" />
+              Connected
+            </p>
+          ) : (
+            <p data-journey="course-not-recognised" className="mt-0.5 inline-flex items-center gap-1 text-sm text-ink">
+              <CircleAlert className="size-3.5 text-ink-muted" strokeWidth={1.75} aria-hidden="true" />
+              Course not recognised
+            </p>
+          )}
         </div>
         <button
           type="button"
@@ -204,6 +210,8 @@ function JourneyRow() {
           Disconnect
         </button>
       </div>
+      {/* the server's sentence names the id ("… this copy's course id is wrong; ask Rahul") */}
+      {problem !== null && <p className="mt-2 text-sm text-ink-muted">{problem.error}</p>}
       {error && (
         <p role="alert" className="mt-2 text-sm text-ink">
           {error}
@@ -245,7 +253,9 @@ function JourneyRow() {
           ? 'That link doesn’t look right — copy it again from JS Journey.'
           : err instanceof ApiError && err.status === 502
             ? 'JS Journey didn’t accept that link.'
-            : 'Couldn’t reach JS Journey. Check the internet connection and try again.',
+            : err instanceof ApiError && err.problem !== null
+              ? err.problem.error // 409: the link is fine, this copy's course id is not — the sentence names it
+              : 'Couldn’t reach JS Journey. Check the internet connection and try again.',
       );
     } finally {
       setBusy(false);

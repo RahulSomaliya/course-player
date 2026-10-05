@@ -1,4 +1,8 @@
-// Modal dialog: scrim, centred card, Escape closes, focus moves in and is restored on close.
+// Modal dialog: scrim, centred card, Escape closes, focus moves in and is restored on close — to the
+// element focused when it opened, or `returnFocus()` when that one is gone: after Send / Discard the
+// header has swapped the timer chip for "Start studying", and "Note to Rahul…" sits in a menu that closed.
+// Focusing a detached element does nothing, so focus fell to <body> and Tab restarted at the page top
+// (review 2026-10-05).
 // Used sparingly (sign-off card, shortcut sheet, in-app pdf) — everything else is inline.
 // Motion: `enter="rise"` lifts the card in (the sign-off card); `leaving` plays the exit (scrim fades,
 // card drops away, 180 ms) — the owner unmounts it when that is done.
@@ -16,14 +20,18 @@ interface DialogProps {
   tone?: 'app' | 'player';
   enter?: 'pop' | 'rise';
   leaving?: boolean;
+  /** where focus goes on close when the element focused at open is no longer on the page (or was none) */
+  returnFocus?: () => HTMLElement | null;
 }
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-export function Dialog({ open, onClose, labelledBy, children, className = 'max-w-md', tone = 'app', enter = 'pop', leaving = false }: DialogProps) {
+export function Dialog({ open, onClose, labelledBy, children, className = 'max-w-md', tone = 'app', enter = 'pop', leaving = false, returnFocus }: DialogProps) {
   const card = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  const returnRef = useRef(returnFocus);
+  returnRef.current = returnFocus;
 
   useEffect(() => {
     if (!open) return;
@@ -53,7 +61,8 @@ export function Dialog({ open, onClose, labelledBy, children, className = 'max-w
     document.addEventListener('keydown', onKey, true);
     return () => {
       document.removeEventListener('keydown', onKey, true);
-      before?.focus();
+      const back = before !== null && before !== document.body && before.isConnected ? before : (returnRef.current?.() ?? null);
+      back?.focus();
     };
   }, [open]);
 

@@ -10,13 +10,14 @@
 import { mkdir } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { BootPayload, Course, JourneySession, ProgressSnapshot, ProgressState } from '../shared/types.ts';
+import type { BootPayload, Course, JourneySession, OutboxState, ProgressSnapshot, ProgressState } from '../shared/types.ts';
 import { ConfigStore, PROFILE_ID_RE } from './config.ts';
+import { folderCourseId, resolveCourseId, type ResolvedCourseId } from './course-id.ts';
 import { HttpError, readJsonBody, sendEmpty, sendJson } from './http.ts';
-import { Journey, parseReadIds, validateProgressSnapshot, validateSession } from './journey.ts';
+import { AlreadyDelivered, Journey, OUTBOX_WAIT_MAX_MS, parseReadIds, parseRetryIds, validateProgressSnapshot, validateSession } from './journey.ts';
 import { errorMessage, type Log } from './log.ts';
 import { serveMedia } from './media.ts';
-import { courseIdFor, scanCourse } from './scan.ts';
+import { scanCourse } from './scan.ts';
 import { serveStatic } from './static.ts';
 import { ProgressStore, validateProgress } from './store.ts';
 
@@ -42,6 +43,8 @@ export interface AppOptions {
 export interface CourseServer {
   server: http.Server;
   journey: Journey;
+  /** Course.id and where it came from (course-id.ts) */
+  courseId: ResolvedCourseId;
   /** binds 127.0.0.1 only; resolves with the bound port */
   listen: (port: number) => Promise<number>;
   /** the scanned course (the initial scan; retried if it failed) */
@@ -60,7 +63,10 @@ export async function createCourseServer(opts: AppOptions): Promise<CourseServer
   await mkdir(dataDir, { recursive: true });
   const config = await ConfigStore.load(dataDir);
   if (!config.exists) log(`[config] no config.json in ${dataDir} — using the folder name as title and no profiles`);
-  const courseId = courseIdFor(root);
+  // Pinned, never just the folder name (2026-10-05: her copy's folder → "react-course" → every update
+  // 4xx'd). Throws on an invalid .player/course.json: main exits loudly, like for config.json.
+  const resolved = await resolveCourseId({ root, config, log });
+  const courseId = resolved.id;
   const progress = new ProgressStore(dataDir, log);
   const journey = new Journey({ dataDir, config, courseId, log, timeoutMs: opts.journeyTimeoutMs });
 
@@ -69,7 +75,7 @@ export async function createCourseServer(opts: AppOptions): Promise<CourseServer
   const course = (): Promise<Course> => {
     if (scan === null || scanFailed) {
       scanFailed = false;
-      scan = scanCourse({ root, dataDir, title: config.title, subtitle: config.subtitle, log }).then(
+      scan = scanCourse({ root, dataDir, courseId, title: config.title, subtitle: config.subtitle, log }).then(
         (r) => r.course,
         (err: unknown) => {
           scanFailed = true; // the next /api/boot retries (e.g. the SSD was reconnected)
@@ -104,7 +110,13 @@ export async function createCourseServer(opts: AppOptions): Promise<CourseServer
       pattern: /^\/api\/boot$/,
       methods: {
         GET: async ({ res }) => {
-          const payload: BootPayload = { course: await course(), profiles: config.profiles(), version };
+          const payload: BootPayload = {
+            course: await course(),
+            profiles: config.profiles(),
+            version,
+            courseIdFrom: resolved.from,
+            folderCourseId: folderCourseId(root),
+          };
           sendJson(res, 200, payload);
         },
       },
@@ -136,12 +148,16 @@ export async function createCourseServer(opts: AppOptions): Promise<CourseServer
           const check = await journey.checkLink(link);
           if (!check.ok) {
             log(`[journey] ${profile}: link not saved (${check.status === 400 ? 'malformed' : check.message})`);
-            throw new HttpError(check.status, check.message);
+            throw new HttpError(check.status, check.message, check.status === 409 ? { ...check.problem } : {});
           }
           const saved = await config.setJourneyLink(profile, check.link);
           log(`[journey] ${profile}: connected`);
-          // deliver anything queued before a reconnect; failures are logged, the reply doesn't wait
-          journey.flush(profile).catch((err: unknown) => log(`[journey] ${profile}: flush failed: ${errorMessage(err)}`));
+          // deliver everything kept while not connected (v3) and give rejected updates another go — a new
+          // link is a fix like a restart. Local file work only; JS Journey is called in the background.
+          // The link IS saved by now: a failure here is logged, not answered as a failed connect.
+          await journey.retry(profile, undefined, 'connected').catch((err: unknown) => {
+            log(`[journey] ${profile}: delivery after connecting failed to start — ${errorMessage(err)}`);
+          });
           sendJson(res, 200, saved);
         },
         DELETE: async ({ res, params }) => {
@@ -156,9 +172,12 @@ export async function createCourseServer(opts: AppOptions): Promise<CourseServer
       pattern: /^\/api\/journey\/([^/]+)\/status$/,
       methods: {
         GET: async ({ res, params }) => {
-          const status = await journey.status(profileParam(params[0] as string));
-          if (status === null) sendEmpty(res, 204);
-          else sendJson(res, 200, status);
+          const result = await journey.status(profileParam(params[0] as string));
+          if (result.kind === 'status') sendJson(res, 200, result.status);
+          // v3: a course JS Journey does not know is shown to her (menu: "course not recognised"), never a
+          // silent 204 that looks like "offline" — that is how the 2026-10-05 sign-off vanished unnoticed
+          else if (result.kind === 'problem') sendJson(res, 409, result.problem);
+          else sendEmpty(res, 204);
         },
       },
     },
@@ -170,8 +189,16 @@ export async function createCourseServer(opts: AppOptions): Promise<CourseServer
           const body = await readJsonBody(req, BODY_LIMIT);
           const problem = validateSession(body, courseId);
           if (problem !== null) throw new HttpError(400, problem);
-          const state = await journey.enqueue(profile, body as JourneySession); // shape proved just above
-          if (state === null) throw new HttpError(409, 'This profile is not connected to JS Journey');
+          // v3: accepted while not connected too — kept in the outbox, delivered once she connects (v2
+          // 409'd here and the browser forgot the update)
+          let state: OutboxState;
+          try {
+            state = await journey.enqueue(profile, body as JourneySession); // shape proved just above
+          } catch (err) {
+            // a changed copy of an update JS Journey already has: it would answer "duplicate" and drop it
+            if (err instanceof AlreadyDelivered) throw new HttpError(409, err.message);
+            throw err;
+          }
           sendJson(res, 202, state);
         },
       },
@@ -219,7 +246,24 @@ export async function createCourseServer(opts: AppOptions): Promise<CourseServer
     {
       pattern: /^\/api\/journey\/([^/]+)\/outbox$/,
       methods: {
-        GET: async ({ res, params }) => sendJson(res, 200, await journey.outbox(profileParam(params[0] as string))),
+        GET: async ({ req, res, params }) => {
+          const profile = profileParam(params[0] as string);
+          const raw = new URL(req.url ?? '/', 'http://localhost').searchParams.get('wait') ?? '0';
+          const wait = /^\d{1,5}$/.test(raw) ? Number(raw) : Number.NaN;
+          if (!(wait >= 0 && wait <= OUTBOX_WAIT_MAX_MS)) throw new HttpError(400, `wait must be 0–${OUTBOX_WAIT_MAX_MS} ms`);
+          sendJson(res, 200, await journey.outbox(profile, wait));
+        },
+      },
+    },
+    {
+      pattern: /^\/api\/journey\/([^/]+)\/outbox\/retry$/,
+      methods: {
+        POST: async ({ req, res, params }) => {
+          const profile = profileParam(params[0] as string);
+          const parsed = parseRetryIds(await readJsonBody(req, BODY_LIMIT, { allowEmpty: true }));
+          if (!parsed.ok) throw new HttpError(400, parsed.error);
+          sendJson(res, 202, await journey.retry(profile, parsed.ids));
+        },
       },
     },
     {
@@ -275,7 +319,7 @@ export async function createCourseServer(opts: AppOptions): Promise<CourseServer
         return;
       }
       if (err instanceof HttpError) {
-        sendJson(res, err.status, { error: err.message });
+        sendJson(res, err.status, { ...err.body, error: err.message });
         return;
       }
       log(`[http] ${req.method} ${req.url} failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
@@ -319,5 +363,5 @@ export async function createCourseServer(opts: AppOptions): Promise<CourseServer
     opts.exit(0);
   }
 
-  return { server, journey, listen, course, shutdown, stop };
+  return { server, journey, courseId: resolved, listen, course, shutdown, stop };
 }

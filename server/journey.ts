@@ -4,15 +4,28 @@
 //
 // The outbox holds everything the player owes JS Journey: her updates (sessions, oldest first), the
 // read receipts for coach messages she acknowledged, and the newest progress snapshot (latest wins on
-// takenAt). A flush sends them in that order. Delivery rules, the same for all three: 2xx -> remove.
-// 4xx -> remove too and keep the message in lastError (a permanent rejection must not retry forever) —
-// which is why validation here must be at least as strict as JS Journey's (lib/player.ts there): an
-// item it would 400 is refused to the browser up front, never queued to be dropped later.
-// Network error -> keep and stop this flush (the rest would fail the same way). HTTP 5xx -> keep and
-// skip the rest of THAT kind (her updates stay in order), but still try the other kinds: a 5xx can be
-// about one row, and must not stall "Got it" and the coach's stats behind it. Retried on start-up,
-// every 5 min, on each new queued item and on quit. JS Journey dedups sessions on id, read receipts are
-// idempotent and snapshots only win when newer, so re-sending after a lost response is safe.
+// takenAt). A flush sends them in that order. Delivery rules:
+// - 2xx -> delivered, out of the queue. An update leaves a receipt (the last DELIVERED_KEEP), so the
+//   browser can say "Sent to Rahul ✓" instead of "the local server queued it".
+// - 4xx -> not retried on its own (a permanent rejection must not retry forever); message in lastError.
+//   Her UPDATE is kept as `rejected` — NEVER dropped (v3). v2 deleted it: on 2026-10-05 her copy's course
+//   id was wrong, JS Journey 4xx'd her sign-off and it was gone for good. Rejected updates are re-queued
+//   once on every server start, on (re)connect and on "Try again" (retry()) — a fixed course id or a JS
+//   Journey fix then lets them through. Read receipts and snapshots ARE dropped (no words of hers; the
+//   next snapshot supersedes). Validation here stays at least as strict as JS Journey's (lib/player.ts
+//   there): an item it would 400 is refused to the browser up front, never queued to be rejected later.
+// - Network error -> keep and stop this flush (the rest would fail the same way). HTTP 5xx -> keep and
+//   skip the rest of THAT kind (her updates stay in order), but still try the other kinds: a 5xx can be
+//   about one row, and must not stall "Got it" and the coach's stats behind it.
+// Retried on start-up, every 5 min, on each new queued item and on quit. JS Journey dedups sessions on id,
+// read receipts are idempotent and snapshots only win when newer, so re-sending after a lost response is
+// safe. Dedup means JS Journey keeps the FIRST body of an id and answers a re-post 200 "duplicate",
+// storing nothing: a CHANGED copy of a delivered update (a 2nd window's sign-off of the same session) is
+// refused up front by enqueue() (AlreadyDelivered → 409) instead of being "delivered" and ignored — that
+// once showed "Sent to Rahul ✓ · note included" for a note Rahul never got (review 2026-10-05).
+// Updates are accepted while NOT connected (v3): they wait here and go out once she connects. Every
+// update and snapshot goes out under THIS copy's course id (opts.courseId), whatever it was queued with —
+// one queued under a guessed folder id would otherwise be rejected again after the id is fixed.
 //
 // A write route answers 202 as soon as the outbox file is saved; delivery runs after the reply
 // (queue()). Awaiting it made "Sending…" and "Got it" last a Vercel/Neon cold start plus the whole
@@ -25,14 +38,18 @@
 //
 // The token rides only in the Authorization header. The URLs we call never contain it, and log lines
 // carry the profile id + HTTP status/message only — never the link.
+import { createHash } from 'node:crypto';
 import { rename } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   CoachMessage,
   JourneyFeed,
+  JourneyProblem,
   JourneySession,
   JourneyStatus,
   OutboxState,
+  OutboxUpdate,
+  PlanRow,
   ProgressSnapshot,
   StudentUpdate,
 } from '../shared/types.ts';
@@ -46,6 +63,12 @@ const MOODS = new Set(['😄', '🙂', '😐', '😩']);
 const READ_IDS_MAX = 500;
 /** JS Journey's cap on an update's minutes */
 const MINUTES_MAX = 1440;
+/** delivery receipts kept in the outbox (the browser's "Sent to Rahul ✓" + recent history) */
+const DELIVERED_KEEP = 50;
+/** the most a GET outbox?wait= may hold the request (the sign-off card asks for ~8 s) */
+export const OUTBOX_WAIT_MAX_MS = 10_000;
+/** JourneySession.id is 1–100 chars (validateSession) */
+const SESSION_ID_MAX = 100;
 /** JS Journey's message ids (and what its feed/read route insists on) */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -152,6 +175,19 @@ export function parseReadIds(body: unknown): ReadIds {
   return { ok: true, ids: [...new Set(ids)] };
 }
 
+export type RetryIds = { ok: true; ids: string[] | undefined } | { ok: false; error: string };
+
+/** Body of POST outbox/retry: absent / `{}` = every rejected update, `{ids}` = those updates only. */
+export function parseRetryIds(body: unknown): RetryIds {
+  if (body === undefined) return { ok: true, ids: undefined };
+  if (!isRecord(body)) return { ok: false, error: 'body must be {} or { ids: [...] }' };
+  if (body.ids === undefined) return { ok: true, ids: undefined };
+  const ids = body.ids;
+  if (!Array.isArray(ids) || ids.length === 0 || ids.length > READ_IDS_MAX) return { ok: false, error: `ids must be a list of 1–${READ_IDS_MAX} update ids` };
+  if (!ids.every((id: unknown) => isString(id) && id.length > 0 && id.length <= SESSION_ID_MAX)) return { ok: false, error: 'each id must be an update id' };
+  return { ok: true, ids: [...new Set(ids as string[])] };
+}
+
 /** A well-formed inclusive day range with a label (one plan break). */
 function isBreakRange(x: unknown): boolean {
   return isRecord(x) && isString(x.label) && isDay(x.start) && isDay(x.end) && x.start <= x.end;
@@ -204,17 +240,43 @@ function isWireStatus(x: unknown): x is WireStatus {
   );
 }
 
+const PLAN_STATES = new Set(['done', 'current', 'behind', 'upcoming', 'past']);
+const isPlanRow = (x: unknown): x is PlanRow =>
+  isRecord(x) &&
+  ((x.kind === 'week' && isInt(x.week, 0) && isDay(x.due) && isString(x.goal) && isString(x.state) && PLAN_STATES.has(x.state)) ||
+    (x.kind === 'break' && isString(x.label) && isDay(x.start) && isDay(x.end) && typeof x.now === 'boolean'));
+const isPlan = (x: unknown): x is PlanRow[] => Array.isArray(x) && x.every(isPlanRow);
+
 /** The JourneyStatus with every field present (missing later fields filled: no break, no due dates,
- *  nothing skipped, Mon–Fri with no breaks), or null for a malformed body. */
+ *  nothing skipped, Mon–Fri with no breaks), or null for a malformed body. `plan` (v3) is the exception:
+ *  optional, and a malformed one is left OUT rather than failing the status — it is display-only, and a
+ *  new row state on JS Journey's side must not take "This week", Due and the streak calendar down with it.
+ *  status() logs the drop. */
 export function parseJourneyStatus(x: unknown): JourneyStatus | null {
   if (!isWireStatus(x)) return null;
+  const { plan, ...rest } = x;
   return {
-    ...x,
+    ...rest,
     planBreak: x.planBreak ?? null,
     sectionDue: x.sectionDue ?? {},
     skippedSections: x.skippedSections ?? [],
     studyWeekdays: x.studyWeekdays ?? [...DEFAULT_STUDY_WEEKDAYS],
     planBreaks: x.planBreaks ?? [],
+    ...(isPlan(plan) ? { plan } : {}),
+  };
+}
+
+/** JS Journey's answer for a course id it does not know: 404 `{ error: 'unknown course "<id>"' }` from
+ *  GET /api/player/status and /feed (js-journey app/api/player/status/route.ts, lib/feed.ts
+ *  parseFeedQuery). Matched on the message too: a bare 404 (wrong host, an old deploy) is not the
+ *  course's fault. If JS Journey rewords it, this turns back into a silent "none" — keep them in sync. */
+const isUnknownCourse = (status: number, why: string): boolean => status === 404 && /unknown course/i.test(why);
+
+export function unknownCourseProblem(courseId: string): JourneyProblem {
+  return {
+    error: `JS Journey doesn't know the course '${courseId}' — this copy's course id is wrong; ask Rahul.`,
+    problem: 'unknown-course',
+    courseId,
   };
 }
 
@@ -289,7 +351,21 @@ export function markRead(feed: JourneyFeed, receipts: readonly ReadReceipt[]): J
 // ---- HTTP to JS Journey ------------------------------------------------------------------------
 
 /** `retry.network`: no HTTP answer at all (the rest of the flush would fail the same way) vs an HTTP 5xx. */
-type SendResult = { kind: 'sent' } | { kind: 'rejected'; message: string } | { kind: 'retry'; message: string; network: boolean };
+/** `duplicate`: JS Journey already had this update id and stored nothing of this body (logged) */
+type SendResult = { kind: 'sent'; duplicate: boolean } | { kind: 'rejected'; message: string } | { kind: 'retry'; message: string; network: boolean };
+
+/** A session POST's 2xx: did JS Journey answer {status:'duplicate'}? The 2xx status IS the delivery; a
+ *  body that is not JSON (an older JS Journey, a proxy) or cut off by the request timeout is read as an
+ *  ordinary one — a throw here would fail the whole flush and send it again. */
+async function answeredDuplicate(res: Response): Promise<boolean> {
+  let body: unknown;
+  try {
+    body = JSON.parse(await res.text());
+  } catch {
+    return false;
+  }
+  return isRecord(body) && body.status === 'duplicate';
+}
 
 /** "Session overlaps…" from {error}/{message} JSON, else the trimmed text, else the status text. */
 async function describeFailure(res: Response): Promise<string> {
@@ -315,10 +391,61 @@ function networkMessage(err: unknown): string {
 
 // ---- outbox ----------------------------------------------------------------------------------
 
+/** An update JS Journey answered 4xx — kept until re-queued, never dropped (v3). */
+interface RejectedUpdate {
+  session: JourneySession;
+  /** "HTTP 400 — <JS Journey's message>" */
+  error: string;
+  at: string; // ISO, when JS Journey refused it
+}
+
+/** Proof an update reached JS Journey (2xx). */
+interface DeliveredReceipt {
+  id: string;
+  at: string; // ISO
+  /** updateSig of the body delivered (absent in a receipt written before it existed: never matches) */
+  sig?: string;
+}
+
+/** What JS Journey keeps of an update, as a short hash: everything but the course label (re-sent under
+ *  this copy's id) and the progress snapshot (rebuilt on every send; JS Journey keeps the newest anyway).
+ *  The same sig = the same words, so a re-post of it is a no-op, not a change JS Journey would drop. */
+function updateSig(s: JourneySession): string {
+  const words = [
+    s.startedAt,
+    s.endedAt,
+    s.studyDate,
+    s.minutes,
+    s.sectionNumber,
+    s.lecturesCompleted.map((l) => [l.section, l.lecture, l.title]),
+    s.finishedSections,
+    s.mood,
+    s.note,
+    s.stuck,
+    s.autoClosed,
+  ];
+  return createHash('sha256').update(JSON.stringify(words)).digest('hex').slice(0, 16);
+}
+
+/** enqueue() refused a CHANGED copy of an update JS Journey already has (see the header). The message is
+ *  hers to read (the route answers 409 with it; the sign-off card shows it). */
+export class AlreadyDelivered extends Error {
+  constructor(readonly id: string) {
+    super('This update already reached Rahul — what you changed can’t be added to it. Send it as a Note to Rahul… instead.');
+    this.name = 'AlreadyDelivered';
+  }
+}
+
+/** <data>/outbox-<profile>.json. v1 had items + lastError, v2 added reads + progress, v3 adds rejected +
+ *  delivered: every older file loads as is (her Mac has a v2 one), the next save writes v3. */
 interface OutboxFile {
-  v: 2;
-  /** her updates, oldest first */
+  v: 3;
+  /** her updates still to deliver, oldest first */
   items: JourneySession[];
+  /** her updates JS Journey refused, oldest first (absent before v3) */
+  rejected: RejectedUpdate[];
+  /** the last DELIVERED_KEEP delivery receipts, oldest first, one per id (absent before v3) */
+  delivered: DeliveredReceipt[];
   /** acknowledged coach messages not yet confirmed by JS Journey (absent in a v1 file) */
   reads: ReadReceipt[];
   /** the newest snapshot not yet delivered (absent in a v1 file) */
@@ -326,24 +453,81 @@ interface OutboxFile {
   lastError: string | null;
 }
 
-/** `pending` counts her updates only: receipts and the snapshot ride along without a badge. */
-const view = (o: OutboxFile): OutboxState => ({ pending: o.items.length, lastError: o.lastError });
-const hasWork = (o: OutboxFile): boolean => o.items.length > 0 || o.reads.length > 0 || o.progress !== null;
-const emptyOutbox = (): OutboxFile => ({ v: 2, items: [], reads: [], progress: null, lastError: null });
+/** Enough to list it and send it again; the full shape was validated when it was queued. */
+const isQueuedSession = (x: unknown): x is JourneySession => isRecord(x) && isString(x.id) && isString(x.endedAt);
+const isRejectedUpdate = (x: unknown): x is RejectedUpdate => isRecord(x) && isQueuedSession(x.session) && isString(x.error) && isString(x.at);
+const isDeliveredReceipt = (x: unknown): x is DeliveredReceipt => isRecord(x) && isString(x.id) && isString(x.at) && (x.sig === undefined || isString(x.sig));
 
-/** One delivery a flush makes; `remove` takes it out of the outbox once JS Journey answered for good.
- *  It is applied to the outbox as it is AFTER the requests (re-read under the lock: items may have been
- *  queued meanwhile), so it removes exactly what was delivered and nothing queued since. */
+/** `pending` counts her queued updates only: receipts and the snapshot ride along without a badge, and a
+ *  rejected update waits for a retry, not for the next flush. `updates`: one entry per id (queued beats
+ *  rejected beats delivered): the waiting ones first (queued, then rejected), then the receipts, each newest
+ *  `at` first — shared/types.ts OutboxUpdate. Never one `at` ordering across states: a queued `at` is when the
+ *  session ENDED, a receipt's is when JS Journey took it, so a receipt stamped now outranked a queued update
+ *  that ended earlier and `updates[0]` was no longer the one waiting (a test failed once the wall clock
+ *  passed its fixture's endedAt, 2026-10-05). */
+const STATE_RANK: Record<OutboxUpdate['state'], number> = { queued: 0, rejected: 1, delivered: 2 };
+
+function view(o: OutboxFile): OutboxState {
+  const listed = new Set<string>();
+  const updates: OutboxUpdate[] = [];
+  for (const session of o.items) {
+    listed.add(session.id);
+    updates.push({ id: session.id, state: 'queued', at: session.endedAt, error: null, session });
+  }
+  for (const r of o.rejected) {
+    if (listed.has(r.session.id)) continue;
+    listed.add(r.session.id);
+    updates.push({ id: r.session.id, state: 'rejected', at: r.at, error: r.error, session: r.session });
+  }
+  for (const d of o.delivered) {
+    if (!listed.has(d.id)) updates.push({ id: d.id, state: 'delivered', at: d.at, error: null });
+  }
+  updates.sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || Date.parse(b.at) - Date.parse(a.at));
+  return { pending: o.items.length, lastError: o.lastError, updates };
+}
+const hasWork = (o: OutboxFile): boolean => o.items.length > 0 || o.reads.length > 0 || o.progress !== null;
+const emptyOutbox = (): OutboxFile => ({ v: 3, items: [], rejected: [], delivered: [], reads: [], progress: null, lastError: null });
+
+/** `duplicate`: JS Journey answered that it already had this id and stored nothing of THIS body — an
+ *  existing receipt then still describes the copy it has (its sig judges the next post), never this one. */
+function recordDelivered(o: OutboxFile, session: JourneySession, at: string, duplicate: boolean): void {
+  const { id } = session;
+  o.rejected = o.rejected.filter((r) => r.session.id !== id);
+  const kept = duplicate ? o.delivered.find((d) => d.id === id) : undefined;
+  if (kept !== undefined) return;
+  o.delivered = [...o.delivered.filter((d) => d.id !== id), { id, at, sig: updateSig(session) }].slice(-DELIVERED_KEEP);
+}
+
+function recordRejected(o: OutboxFile, session: JourneySession, error: string, at: string): void {
+  o.rejected = [...o.rejected.filter((r) => r.session.id !== session.id), { session, error, at }];
+}
+
+/** `session` as THIS copy's course sends it (see the header: an update queued under a guessed id). */
+function forCourse(session: JourneySession, courseId: string): JourneySession {
+  if (session.course === courseId && (session.progress === null || session.progress.course === courseId)) return session;
+  return { ...session, course: courseId, progress: session.progress === null ? null : { ...session.progress, course: courseId } };
+}
+
+/** What JS Journey answered for good: delivered (`duplicate`: it already had the id), or refused (4xx). */
+type Outcome = { kind: 'sent'; duplicate: boolean } | { kind: 'rejected'; message: string };
+
+/** One delivery a flush makes; `settle` records JS Journey's final answer in the outbox. It is applied
+ *  to the outbox as it is AFTER the requests (re-read under the lock: items may have been queued
+ *  meanwhile), so it settles exactly what was sent and nothing queued since. */
 interface Job {
   kind: 'session' | 'reads' | 'progress';
   what: string;
   method: 'POST' | 'PUT';
   route: string;
   body: unknown;
-  remove: (outbox: OutboxFile) => void;
+  /** logged before sending: the item was queued under another course id and goes out under this one */
+  relabelled: string | null;
+  settle: (outbox: OutboxFile, outcome: Outcome, at: string) => void;
 }
 
-function jobsFor(outbox: OutboxFile): Job[] {
+const relabel = (what: string, from: string, to: string): string | null => (from === to ? null : `${what} was queued for course "${from}" — sent as "${to}"`);
+
+function jobsFor(outbox: OutboxFile, courseId: string): Job[] {
   const jobs: Job[] = outbox.items.map((session) => {
     const sent = JSON.stringify(session);
     return {
@@ -351,10 +535,15 @@ function jobsFor(outbox: OutboxFile): Job[] {
       what: `session ${session.id}`,
       method: 'POST',
       route: '/api/player/sessions',
-      body: session,
-      // a re-posted id replaced while this one was in flight is a different body: it stays queued
-      remove: (o) => {
+      body: forCourse(session, courseId),
+      relabelled: relabel(`session ${session.id}`, session.course, courseId),
+      // a re-posted id replaced while this one was in flight is a different body: it stays queued (and a
+      // refusal of the old body is not recorded — the new one may well go through)
+      settle: (o, outcome, at) => {
+        const before = o.items.length;
         o.items = o.items.filter((s) => JSON.stringify(s) !== sent);
+        if (outcome.kind === 'sent') recordDelivered(o, session, at, outcome.duplicate);
+        else if (o.items.length < before) recordRejected(o, session, outcome.message, at);
       },
     };
   });
@@ -368,8 +557,9 @@ function jobsFor(outbox: OutboxFile): Job[] {
       method: 'POST',
       route: '/api/player/feed/read',
       body: { ids },
-      remove: (o) => {
-        o.reads = o.reads.filter((r) => !batch.has(r.id));
+      relabelled: null,
+      settle: (o) => {
+        o.reads = o.reads.filter((r) => !batch.has(r.id)); // delivered or refused: gone either way
       },
     });
   }
@@ -380,8 +570,9 @@ function jobsFor(outbox: OutboxFile): Job[] {
       what: 'progress snapshot',
       method: 'PUT',
       route: '/api/player/progress',
-      body: snap,
-      remove: (o) => {
+      body: { ...snap, course: courseId },
+      relabelled: relabel('progress snapshot', snap.course, courseId),
+      settle: (o) => {
         if (o.progress !== null && o.progress.takenAt <= snap.takenAt) o.progress = null; // a newer one stays
       },
     });
@@ -399,7 +590,17 @@ export interface JourneyOptions {
   timeoutMs?: number;
 }
 
-export type LinkCheck = { ok: true; link: string } | { ok: false; status: 400 | 502; message: string };
+export type LinkCheck =
+  | { ok: true; link: string }
+  | { ok: false; status: 400 | 502; message: string }
+  /** the link works but JS Journey does not know this copy's course id (v3) */
+  | { ok: false; status: 409; message: string; problem: JourneyProblem };
+
+/** GET status, as the status route answers it: 200 / 204 / 409 (shared/types.ts route list). */
+export type StatusResult = { kind: 'status'; status: JourneyStatus } | { kind: 'none' } | { kind: 'problem'; problem: JourneyProblem };
+
+/** Why rejected updates went back into the queue (logged). */
+export type RequeueReason = 'try again' | 'connected' | 'server start';
 
 /** A feed for the browser; `stale` = the cached copy, because a fresh one could not be had. */
 export interface FeedResult {
@@ -442,16 +643,27 @@ export class Journey {
       return this.moveAside(profile, file);
     }
     if (raw === undefined) return emptyOutbox();
-    if (!isRecord(raw) || !Array.isArray(raw.items) || !(raw.lastError === null || isString(raw.lastError))) {
+    if (!isRecord(raw) || !Array.isArray(raw.items) || !raw.items.every(isQueuedSession) || !(raw.lastError === null || isString(raw.lastError))) {
       return this.moveAside(profile, file);
     }
+    // fields added by v2 (reads, progress) and v3 (rejected, delivered) are absent from older files
     const reads: unknown = raw.reads ?? [];
     const progress: unknown = raw.progress ?? null;
-    if (!Array.isArray(reads) || !reads.every(isReadReceipt) || !(progress === null || isRecord(progress))) {
+    const rejected: unknown = raw.rejected ?? [];
+    const delivered: unknown = raw.delivered ?? [];
+    if (
+      !Array.isArray(reads) ||
+      !reads.every(isReadReceipt) ||
+      !(progress === null || isRecord(progress)) ||
+      !Array.isArray(rejected) ||
+      !rejected.every(isRejectedUpdate) ||
+      !Array.isArray(delivered) ||
+      !delivered.every(isDeliveredReceipt)
+    ) {
       return this.moveAside(profile, file);
     }
     // items + progress were validated before they were queued; the shapes are checked above
-    return { v: 2, items: raw.items as JourneySession[], reads, progress: progress as ProgressSnapshot | null, lastError: raw.lastError };
+    return { v: 3, items: raw.items, rejected, delivered, reads, progress: progress as ProgressSnapshot | null, lastError: raw.lastError };
   }
 
   /** Never silently lose pending deliveries: keep the unreadable file for inspection, start empty. */
@@ -491,21 +703,24 @@ export class Journey {
       return { kind: 'retry', message: networkMessage(err), network: true };
     }
     if (res.ok) {
+      if (job.kind === 'session') return { kind: 'sent', duplicate: await answeredDuplicate(res) };
       await res.body?.cancel();
-      return { kind: 'sent' };
+      return { kind: 'sent', duplicate: false };
     }
     const message = `HTTP ${res.status} — ${await describeFailure(res)}`;
     return res.status >= 400 && res.status < 500 ? { kind: 'rejected', message } : { kind: 'retry', message, network: false };
   }
 
-  outbox(profile: string): Promise<OutboxState> {
+  /** The outbox; with `waitMs`, once the deliveries in flight have settled (never longer than that): the
+   *  sign-off card POSTs her update, then asks with a wait whether it was delivered, is still queued or
+   *  was rejected — one round trip, and the 202 itself never waits for JS Journey. */
+  async outbox(profile: string, waitMs = 0): Promise<OutboxState> {
+    if (waitMs > 0) await this.deliveriesSettled(profile, waitMs);
     return this.locks.run(profile, async () => view(await this.load(profile)));
   }
 
-  /** Applies `change` to the outbox (saved when it says so) and returns the outbox as saved. null = not
-   *  connected, nothing written. */
-  private async record(profile: string, change: (outbox: OutboxFile) => boolean): Promise<OutboxState | null> {
-    if (!this.linkFor(profile)) return null;
+  /** Applies `change` to the outbox (saved when it says so) and returns the outbox as saved. */
+  private change(profile: string, change: (outbox: OutboxFile) => boolean): Promise<OutboxState> {
     return this.locks.run(profile, async () => {
       const outbox = await this.load(profile);
       if (change(outbox)) await this.save(profile, outbox);
@@ -513,13 +728,13 @@ export class Journey {
     });
   }
 
-  /** Records `change` and answers with the outbox as saved (the item counted as pending); delivery
-   *  starts in the background. Do NOT await the flush here — see the header (2026-10-01 review). */
-  private async queue(profile: string, change: (outbox: OutboxFile) => boolean): Promise<OutboxState | null> {
-    const saved = await this.record(profile, change);
-    if (saved !== null) this.deliverSoon(profile);
-    return saved;
+  /** change(), only for a connected profile (read receipts + snapshots). null = not connected, nothing
+   *  written. Her updates do NOT go through here: they are kept while not connected (v3). */
+  private async record(profile: string, change: (outbox: OutboxFile) => boolean): Promise<OutboxState | null> {
+    if (!this.linkFor(profile)) return null;
+    return this.change(profile, change);
   }
+
 
   /** A background flush (queued behind any flush in flight; settled() after this sees its result). */
   private deliverSoon(profile: string): void {
@@ -547,14 +762,59 @@ export class Journey {
     }
   }
 
-  /** Queues a validated session (a re-sent id replaces the queued one) and tries to deliver it now. */
-  enqueue(profile: string, session: JourneySession): Promise<OutboxState | null> {
-    return this.queue(profile, (outbox) => {
+  /** Queues a validated session — connected or not (v3: an update is never turned away; it goes out once
+   *  she connects) — and answers with the outbox as saved; delivery starts in the background. Do NOT await
+   *  the flush here (see the header, 2026-10-01 review). A re-sent id replaces the queued one, and takes a
+   *  rejected one back into the queue ("Try again" with her edited note). An id already DELIVERED is never
+   *  queued again (JS Journey would only answer "duplicate"): the same words are a no-op, a changed copy
+   *  throws AlreadyDelivered (see the header). */
+  async enqueue(profile: string, session: JourneySession): Promise<OutboxState> {
+    const sig = updateSig(session);
+    let delivered: 'same' | 'changed' | null = null;
+    const saved = await this.change(profile, (outbox) => {
+      const receipt = outbox.delivered.find((d) => d.id === session.id);
+      if (receipt !== undefined) {
+        delivered = receipt.sig === sig ? 'same' : 'changed';
+        return false;
+      }
+      outbox.rejected = outbox.rejected.filter((r) => r.session.id !== session.id);
       const i = outbox.items.findIndex((s) => s.id === session.id);
       if (i >= 0) outbox.items[i] = session;
       else outbox.items.push(session);
       return true;
     });
+    if (delivered === 'changed') {
+      this.opts.log(`[journey] ${profile}: session ${session.id} already reached JS Journey — a changed copy was refused`);
+      throw new AlreadyDelivered(session.id);
+    }
+    if (delivered === null) this.deliverSoon(profile);
+    return saved;
+  }
+
+  /** "Try again" (and (re)connect): re-queues the rejected updates — all, or those `ids` — and starts a
+   *  delivery in the background. Answers with the outbox as saved. */
+  async retry(profile: string, ids?: readonly string[], why: RequeueReason = 'try again'): Promise<OutboxState> {
+    const saved = await this.requeue(profile, ids, why);
+    this.deliverSoon(profile);
+    return saved;
+  }
+
+  /** Moves rejected updates back to the FRONT of the queue (they are older than what was queued since).
+   *  Writes nothing when there are none — no new outbox file for a profile that never had one. */
+  private async requeue(profile: string, ids: readonly string[] | undefined, why: RequeueReason): Promise<OutboxState> {
+    const picked = (r: RejectedUpdate): boolean => ids === undefined || ids.includes(r.session.id);
+    let moved = 0;
+    const saved = await this.change(profile, (outbox) => {
+      const back = outbox.rejected.filter(picked);
+      if (back.length === 0) return false;
+      const queued = new Set(outbox.items.map((s) => s.id));
+      outbox.rejected = outbox.rejected.filter((r) => !picked(r));
+      outbox.items = [...back.map((r) => r.session).filter((s) => !queued.has(s.id)), ...outbox.items];
+      moved = back.length;
+      return true;
+    });
+    if (moved > 0) this.opts.log(`[journey] ${profile}: ${moved} rejected update(s) re-queued (${why})`);
+    return saved;
   }
 
   /** Queues read receipts (ids already queued keep their time), marks them read in the cached feed, and
@@ -575,13 +835,16 @@ export class Journey {
     return saved;
   }
 
-  /** Queues a validated snapshot unless an equally new or newer one is already queued; tries to deliver. */
-  enqueueProgress(profile: string, snap: ProgressSnapshot): Promise<OutboxState | null> {
-    return this.queue(profile, (outbox) => {
+  /** Queues a validated snapshot unless an equally new or newer one is already queued; tries to deliver.
+   *  null = not connected (nothing written): the browser only pushes snapshots while connected. */
+  async enqueueProgress(profile: string, snap: ProgressSnapshot): Promise<OutboxState | null> {
+    const saved = await this.record(profile, (outbox) => {
       if (outbox.progress !== null && outbox.progress.takenAt >= snap.takenAt) return false;
       outbox.progress = snap;
       return true;
     });
+    if (saved !== null) this.deliverSoon(profile);
+    return saved;
   }
 
   /** Delivers the outbox in order until done, a transient failure, or `deadline` (epoch ms). */
@@ -592,17 +855,18 @@ export class Journey {
       if (!link || !hasWork(queued)) return view(queued);
       const { log } = this.opts;
       const sent = { session: 0, reads: 0, progress: 0 };
-      const done: Job[] = [];
+      const done: { job: Job; outcome: Outcome; at: string }[] = [];
       const delivered: ReadReceipt[] = [];
       const held = new Set<Job['kind']>(); // a kind that got a 5xx this flush: the rest of it waits
       let attempted = false;
       let error: string | null = null;
       // The requests run WITHOUT the outbox lock (see `locks`); results are applied under it below.
-      for (const job of jobsFor(queued)) {
+      for (const job of jobsFor(queued, this.opts.courseId)) {
         if (held.has(job.kind)) continue;
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
         attempted = true;
+        if (job.relabelled !== null) log(`[journey] ${profile}: ${job.relabelled}`);
         const result = await this.send(link, job, Math.min(this.timeoutMs, remaining));
         if (result.kind === 'retry') {
           error = result.message;
@@ -613,19 +877,20 @@ export class Journey {
           held.add(job.kind);
           continue;
         }
-        done.push(job);
+        done.push({ job, outcome: result, at: new Date().toISOString() });
         if (result.kind === 'sent') {
           sent[job.kind]++;
+          if (result.duplicate) log(`[journey] ${profile}: ${job.what} was already on JS Journey (answered duplicate) — it kept the copy it had`);
           if (job.kind === 'reads') delivered.push(...queued.reads.filter((r) => (job.body as { ids: string[] }).ids.includes(r.id)));
         } else {
           error = result.message;
-          log(`[journey] ${profile}: ${result.message} (${job.what} dropped)`);
+          log(`[journey] ${profile}: ${result.message} (${job.what} ${job.kind === 'session' ? 'kept as rejected' : 'dropped'})`);
         }
       }
       if (!attempted) return view(queued);
       const state = await this.locks.run(profile, async () => {
         const outbox = await this.load(profile);
-        for (const job of done) job.remove(outbox);
+        for (const { job, outcome, at } of done) job.settle(outbox, outcome, at);
         // lastError describes the latest flush: a fully delivered flush clears it.
         outbox.lastError = error;
         await this.save(profile, outbox);
@@ -657,16 +922,23 @@ export class Journey {
     }
   }
 
-  /** Start-up flush + retry every 5 min. The timer never keeps the process alive. */
-  start(): void {
+  /** Start-up: re-queue every profile's rejected updates ONCE (a fixed course id or JS Journey fix lets
+   *  them through), then flush; afterwards retry every 5 min. The timer never keeps the process alive.
+   *  Resolves when the start-up delivery is done (main ignores it; tests await it). */
+  start(): Promise<void> {
     const run = (): void => {
       this.flushAll(this.timeoutMs * 2).catch((err: unknown) => {
         this.opts.log(`[journey] retry failed: ${errorMessage(err)}`);
       });
     };
-    run();
     this.timer = setInterval(run, RETRY_EVERY_MS);
     this.timer.unref();
+    return (async () => {
+      for (const p of this.opts.config.profiles()) await this.requeue(p.id, undefined, 'server start');
+      await this.flushAll(this.timeoutMs * 2);
+    })().catch((err: unknown) => {
+      this.opts.log(`[journey] start-up delivery failed: ${errorMessage(err)}`);
+    });
   }
 
   stop(): void {
@@ -774,33 +1046,44 @@ export class Journey {
 
   // ---- status + link check ---------------------------------------------------------------------
 
-  /** GET <origin>/api/player/status?course=<id>; null when not connected, unreachable, non-2xx or malformed. */
-  async status(profile: string): Promise<JourneyStatus | null> {
+  /** GET <origin>/api/player/status?course=<id>. `problem` when JS Journey does not know the course (v3:
+   *  shown to her, never a silent 204 — 2026-10-05); `none` when not connected, unreachable, any other
+   *  non-2xx, or malformed. */
+  async status(profile: string): Promise<StatusResult> {
+    const none: StatusResult = { kind: 'none' };
     const link = this.linkFor(profile);
-    if (!link) return null;
+    if (!link) return none;
     const { log } = this.opts;
     let res: Response;
     try {
       res = await this.getStatus(link);
     } catch (err) {
       log(`[journey] ${profile}: status ${networkMessage(err)}`);
-      return null;
+      return none;
     }
-    if (res.status === 204 || !res.ok) {
-      if (!res.ok) log(`[journey] ${profile}: status HTTP ${res.status} — ${await describeFailure(res)}`);
-      else await res.body?.cancel();
-      return null;
+    if (!res.ok) {
+      const why = await describeFailure(res);
+      log(`[journey] ${profile}: status HTTP ${res.status} — ${why}`);
+      return isUnknownCourse(res.status, why) ? { kind: 'problem', problem: unknownCourseProblem(this.opts.courseId) } : none;
+    }
+    if (res.status === 204) {
+      await res.body?.cancel();
+      return none;
     }
     let body: unknown;
     try {
       body = await res.json();
     } catch (err) {
       log(`[journey] ${profile}: status body is not JSON — ${errorMessage(err)}`);
-      return null;
+      return none;
     }
     const status = parseJourneyStatus(body);
-    if (status === null) log(`[journey] ${profile}: status body has an unexpected shape`);
-    return status;
+    if (status === null) {
+      log(`[journey] ${profile}: status body has an unexpected shape`);
+      return none;
+    }
+    if (isRecord(body) && body.plan !== undefined && status.plan === undefined) log(`[journey] ${profile}: status plan has an unexpected shape — dropped`);
+    return { kind: 'status', status };
   }
 
   /** Validates a pasted student link by asking JS Journey for this course's status with it. */
@@ -815,6 +1098,10 @@ export class Journey {
     }
     if (!res.ok) {
       const why = await describeFailure(res);
+      if (isUnknownCourse(res.status, why)) {
+        const problem = unknownCourseProblem(this.opts.courseId);
+        return { ok: false, status: 409, message: problem.error, problem };
+      }
       return { ok: false, status: 502, message: `JS Journey did not accept this link (HTTP ${res.status} — ${why}).` };
     }
     await res.body?.cancel();

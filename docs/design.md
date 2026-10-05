@@ -74,8 +74,10 @@ Motion explains a change; it never decorates. Every moment below is OFF under
 `prefers-reduced-motion: reduce` (index.css zeroes durations AND delays, and drops every
 `::view-transition-*` animation; JS-driven motion asks `lib/motion.ts prefersReducedMotion()`).
 
-Feedback holds are reading time, not motion: "Sent ✓" (650 ms) and "✓ Got it" (220 ms) stay under
-reduced motion — only the movement around them becomes instant.
+Feedback holds are reading time, not motion: "✓ Got it" (220 ms) and the "Study timer started" notice
+(4 s) stay under reduced motion — only the movement around them becomes instant. The sign-off
+confirmation is not a hold at all: it stays until she presses Done (v3 — the v2 650 ms "Sent ✓" flash
+read as success on a mere 202 while JS Journey refused the update, 2026-10-05).
 
 **Curves.** Entrances: `--ease-out: cubic-bezier(0.22, 1, 0.36, 1)`. Exits: `--ease-in: cubic-bezier(0.4, 0,
 1, 1)`, about 70 % of the entrance duration. No bounce, no spring overshoot anywhere.
@@ -86,7 +88,7 @@ arrivals and dialogs · 340 ms the morph · ≤ 700 ms the first-paint count-up.
 (`arrive` starts at 40 % opacity, bars at 25 % height, numbers at 0): a screenshot, a slow device or a
 skipped animation never catches it hidden. Staggered keyframes use `backwards` fill so a delayed row
 never flashes in its final state first. **No colour transitions on state indicators** (done ticks, the
-waiting dot, progress) — screenshots catch them mid-fade.
+study-timer chip and its dot, plan marks, progress) — screenshots catch them mid-fade.
 
 | Moment | What moves | Spec | Where |
 |---|---|---|---|
@@ -96,7 +98,9 @@ waiting dot, progress) — screenshots catch them mid-fade.
 | First paint of home | Today / Streak / Complete count up; 30-day bars rise | WHEN EACH FIRST COMES INTO VIEW (≥ 40 % visible, `useSeenOnce`) — usually below the fold, so at mount they finished unseen; until then numbers show 0 and bars hold at 25 %. Count-up ≤ 700 ms ease-out-cubic from 0 (rAF; final value for screen readers); `bar-rise` 520 ms from 25 % height, 12 ms stagger. Once per page load, not on every return from Watch | `CountUp.tsx`, `Stats`, `ThirtyDays`, `HomeScreen`, `lib/motion.ts` |
 | Continue thumbnail | the still frame settles in | transparent over the `player` box until decoded (`loadeddata`), then opacity 200 ms ease-out — no black box, then a pop | `ContinueHero` (`HeroFrame`) |
 | "From Rahul" arrives / Got it | soft rise; ✓ morph, then the block fades while it folds | `arrive` 300 ms; Got it → check 220 ms → fade 150 ms ease-OUT + fold 220 ms ease-IN (it starts 25–40 ms after the hold), done ≈ 470 ms after the click (inside the 500 ms input window, so it adds no CLS — a longer fold for tall cards measured 490–498 ms: too close). Fast fade over a slow-starting fold is why no half-clipped text is ever seen (the reverse pairing showed it at 70 % opacity) | `FromRahul.tsx`, `Collapse` |
-| Sign-off card | rises in; Send → "Sent ✓" → next step or closes | `rise` 260 ms (opacity + 12 px + 0.985 scale); `check-in` 220 ms; hold 650 ms; next step `step-next` 220 ms; close = scrim `fade-out` + card `leave` 180 ms. "Sent ✓" stays on the button through the exit, at full colour: busy = `aria-disabled` + no pointer events, never `disabled` (its 50 % look read as "undone") | `SignOffCard.tsx`, `Dialog.tsx` |
+| Sign-off card | rises in; Send → "Sending…" → the confirmation, which stays until Done | `rise` 260 ms (opacity + 12 px + 0.985 scale); confirmation `arrive` 300 ms + its ✓ `check-in` 220 ms; close = scrim `fade-out` + card `leave` 180 ms. Busy = `aria-disabled` + no pointer events, never `disabled` (its 50 % look read as "undone"); `disabled` only for "nothing to send", with the reason under the button | `SignOffCard.tsx`, `Dialog.tsx` |
+| Study timer started | the quiet notice under the header chip after an auto-start | `pop-in` 200 ms; shown for what is left of 4 s since the start (a remount neither repeats nor loses it) | `components/StudyTimer.tsx` |
+| See full plan | her plan folds open under This week; the chevron turns | `Collapse` 220 ms; chevron 200 ms | `ThisWeek.tsx` |
 | Watch sidebar ‹ › | the section's lecture list slides in from the side it came from | `step-next` / `step-prev` 220 ms (16 px + opacity from 30 %) | `SectionPanel.tsx` |
 | Hover meta | a closed section's length / due date | opacity 150 ms; touch screens (`hover: none`) keep the chevron visible | `CourseContent.tsx` |
 
@@ -117,8 +121,11 @@ waiting dot, progress) — screenshots catch them mid-fade.
 - **Part header** — overline "PART 1" (`text-xs` caps, `ink-muted`) · title (`text-lg` 600) · quiet
   "4 projects"; its sections nest under a 1 px `line` hairline, the part's intro lectures as a
   "Part introduction" row.
-- **Sign off** — a `rounded-full` secondary pill, always in the header: "Sign off · 42m" while studying;
-  a static 10 px accent dot (ring = canvas) when a session waits for her note.
+- **Study timer** (v3) — header: no session → "Start studying", a `rounded-full` secondary pill with an
+  accent timer icon (on home also a secondary `lg` button beside Continue — Continue stays THE primary);
+  running → a `rounded-full` chip "● 1h 23m" (static 8 px accent dot, tabular time, updates every 15 s)
+  that reads "Sign off" on hover AND keyboard focus. Both labels share one grid cell, so the swap never
+  moves its neighbours; its accessible name always says both ("Sign off — studying for 1 h 23 min").
 - **Pills** — pace (`accent-soft` / `accent-ink`; behind = `fill` / `ink`), "Stuck" (same accent pill).
 
 ## Screens
@@ -128,16 +135,21 @@ waiting dot, progress) — screenshots catch them mid-fade.
   (THE primary action) · **This week** (week, goal + due, pace pill — the course due date is the Due stat's
   alone; on a break the break replaces the pace) · 4 stats in a quiet row (Today · Streak · Complete · **Due**, no cards,
   hairline dividers) · 30-day bars · **Your updates** (latest 3, replies threaded under a hairline, "See
-  all"; a reply still unread is one quiet line "Rahul replied · above" — From Rahul shows it in full)
-  · course content.
+  all"; a reply still unread is one quiet line "Rahul replied · above" — From Rahul shows it in full;
+  updates still in the outbox on top: "Waiting to send" / "Didn't reach Rahul — reason · Try again")
+  · course content. This week ends with a quiet "See full plan" (her plan, week by week, the break in
+  place — the coach page's plan list in these tokens).
 - **#/updates** — every update + replies in the same layout, "Show more" pages with the feed cursor.
 - **Watch** — player + details left; the right sidebar (360 px) shows ONLY the current section: overline
   "SECTION 07", title, due date, ‹ › to step sections, lectures, and "Next: §08 …" at the bottom.
   `T` = theatre.
-- **Sign-off card** — a dialog (max 512 px): heading ("Nice work, Mansi" / "You studied 1h 12m on Tue"),
-  the auto summary on a `fill` panel (time · lectures · section, up to 5 ✓ titles, "+N more"), the note
-  (main field), 4 moods, "I'm stuck" pill, quiet "Send without a note", primary "Send to Rahul" /
-  "Sign off & quit".
+- **Sign-off card** — a dialog (max 512 px): "Nice work, Mansi"; a `sunken` panel with "**1h 23m** studied ·
+  started 9:14 am" + a quiet "Edit time" right (opens h + m fields, prefilled unless the timer ran over 24 h,
+  ≤ the timer, the reason inline in `ink` beside them only; "Use timer" closes them), then what the session
+  recorded (lectures · section, up to 5 ✓ titles, "+N more"); the note (optional), 4 moods,
+  "I'm stuck"; a quiet "Discard" (confirmed in place) left, ONE primary "Send to Rahul" / "Send & quit"
+  right. After Send a confirmation in place: solid accent ✓ disc + "Sent to Rahul" (delivered) or a soft
+  ✓ disc + "Saved" (still queued), and "Done". "Note to Rahul…" (menu) is the same card without time.
 - **Player** — Netflix feel: dark, immersive, bottom gradient chrome that fades 2.5 s after the last
   move while playing, accent played-range, centre pulse on click.
 - **30-day chart** — single series ⇒ no legend; bars ≤ 20 px wide with a 4 px rounded top, square at the

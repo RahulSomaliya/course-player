@@ -3,21 +3,34 @@
 //   a sign-off; the last good copy of each is cached in localStorage so the next open renders at once
 //   (and Due + the streak's plan calendar keep a value offline). "Got it" goes through a local read
 //   queue (lib/feed.ts).
+//   v3 (docs/spec-v3-study-timer.md): also her updates in the LOCAL outbox (queued / rejected / delivered
+//   receipts — read connected or not: updates wait there until she connects), the delivery answer the
+//   sign-off card shows (awaitDelivery), "Try again" (retry), and `problem` = JS Journey does not know
+//   this copy's course id (status 409) — shown in the menu, never mistaken for "offline".
 // - SnapshotPusher: PUTs her progress snapshot, ≤ 1 per 5 min on changes, at once on sign-off/Quit.
 // Everything goes through the local server (lib/api.ts), which holds the token and retries.
 import { createContext, useContext, useSyncExternalStore } from 'react';
-import type { JourneyFeed, JourneyStatus, ProgressSnapshot } from '../../../shared/types';
+import type { JourneyFeed, JourneyProblem, JourneyStatus, OutboxState, OutboxUpdate, PlanRow, ProgressSnapshot } from '../../../shared/types';
+import { ApiError } from '../lib/api';
 import { isJourneyFeed, readQueueAfter, shouldRefetch } from '../lib/feed';
+import { deliveryOf, type Delivery } from '../lib/outbox';
 import { nextPushDelay } from '../lib/snapshot';
 import { DEFAULT_CALENDAR } from '../lib/stats';
 import { readJson, writeJson, type KeyValueStore } from '../lib/storage';
 
 export interface JourneyApi {
-  /** null = 204 (not connected / JS Journey unreachable) */
+  /** null = 204 (not connected / JS Journey unreachable); throws ApiError with `problem` on 409 */
   status: () => Promise<JourneyStatus | null>;
   feed: () => Promise<{ feed: JourneyFeed; stale: boolean } | null>;
   read: (ids: string[]) => Promise<void>;
+  /** the local outbox; `waitMs` = answer once the deliveries in flight settled (≤ that long) */
+  outbox: (waitMs?: number) => Promise<OutboxState>;
+  /** "Try again": re-queue these rejected updates */
+  retry: (ids: string[]) => Promise<OutboxState>;
 }
+
+/** how long the sign-off card / Try again wait for JS Journey's answer before saying "Saved ✓" */
+export const DELIVERY_WAIT_MS = 8000;
 
 export interface JourneyState {
   status: JourneyStatus | null;
@@ -28,6 +41,10 @@ export interface JourneyState {
   readIds: ReadonlySet<string>;
   /** the first refresh after open has settled (screens wait for it briefly, see App.tsx) */
   loaded: boolean;
+  /** her updates in the local outbox (OutboxState.updates: queued, rejected, recent delivered receipts) */
+  outbox: OutboxUpdate[];
+  /** JS Journey answered "unknown course" for this copy's id (status 409) — null once a status works */
+  problem: JourneyProblem | null;
 }
 
 export interface JourneyStoreOptions {
@@ -42,8 +59,10 @@ export interface JourneyStoreOptions {
 const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const isStrings = (x: unknown): x is string[] => Array.isArray(x) && x.every((v) => typeof v === 'string');
 
-/** A status cached before the plan calendar (studyWeekdays / planBreaks) existed lacks it. */
-type CachedStatus = Omit<JourneyStatus, 'studyWeekdays' | 'planBreaks'> & Partial<Pick<JourneyStatus, 'studyWeekdays' | 'planBreaks'>>;
+/** A status cached before the plan calendar (studyWeekdays / planBreaks) existed lacks it; `plan` is
+ *  checked on its own (fromCache). */
+type CachedStatus = Omit<JourneyStatus, 'studyWeekdays' | 'planBreaks' | 'plan'> &
+  Partial<Pick<JourneyStatus, 'studyWeekdays' | 'planBreaks'>> & { plan?: unknown };
 
 const isBreak = (b: unknown): boolean =>
   isRecord(b) && typeof b.label === 'string' && typeof b.start === 'string' && typeof b.end === 'string';
@@ -63,11 +82,24 @@ export function isCachedStatus(x: unknown): x is CachedStatus {
   );
 }
 
+const isStr = (x: unknown): x is string => typeof x === 'string';
+const WEEK_STATES = new Set(['done', 'current', 'behind', 'upcoming', 'past']);
+
+/** One row of JourneyStatus.plan (the server validated the live copy; this is the cached one). */
+function isPlanRow(x: unknown): x is PlanRow {
+  if (!isRecord(x)) return false;
+  if (x.kind === 'week') return typeof x.week === 'number' && isStr(x.due) && isStr(x.goal) && isStr(x.state) && WEEK_STATES.has(x.state);
+  return x.kind === 'break' && isStr(x.label) && isStr(x.start) && isStr(x.end) && typeof x.now === 'boolean';
+}
+
 /** The cached copy with the plan calendar filled (Mon–Fri, no breaks) when it predates it — else the
- *  streak would read `undefined` until the first refresh, or for good while offline. */
+ *  streak would read `undefined` until the first refresh, or for good while offline. A plan of the wrong
+ *  shape is dropped on its own (it only feeds "See full plan", which hides without it). */
 function fromCache(s: CachedStatus | null): JourneyStatus | null {
   if (s === null) return null;
-  return { ...s, studyWeekdays: s.studyWeekdays ?? [...DEFAULT_CALENDAR.studyWeekdays], planBreaks: s.planBreaks ?? [] };
+  const { plan, ...rest } = s;
+  const okPlan = Array.isArray(plan) && plan.every(isPlanRow) ? { plan } : {};
+  return { ...rest, ...okPlan, studyWeekdays: s.studyWeekdays ?? [...DEFAULT_CALENDAR.studyWeekdays], planBreaks: s.planBreaks ?? [] };
 }
 
 export class JourneyStore {
@@ -88,6 +120,8 @@ export class JourneyStore {
       stale: false,
       readIds: new Set(readJson(opts.storage, this.keys.read, isStrings) ?? []),
       loaded: false,
+      outbox: [],
+      problem: null,
     };
   }
 
@@ -117,23 +151,68 @@ export class JourneyStore {
     void this.postRead(ids);
   }
 
+  /** The 202 answer of a sign-off (POST sessions): "Waiting to send" shows at once. */
+  noteOutbox(o: OutboxState): void {
+    this.set({ outbox: o.updates });
+  }
+
+  /** What became of update `id`: one GET outbox?wait= (the server holds it until the deliveries in flight
+   *  settled, ≤ waitMs). Throws when the course server does not answer — the caller says what that means. */
+  async awaitDelivery(id: string, waitMs = DELIVERY_WAIT_MS): Promise<Delivery> {
+    const o = await this.opts.api.outbox(waitMs);
+    this.noteOutbox(o);
+    return deliveryOf(o, id);
+  }
+
+  /** "Try again" on a rejected update ("Your updates"): re-queue it, wait for the answer; once it went
+   *  through, the feed (which now has it) is fetched. Throws when the course server does not answer. */
+  async retry(id: string): Promise<Delivery> {
+    this.noteOutbox(await this.opts.api.retry([id]));
+    const delivery = await this.awaitDelivery(id);
+    if (delivery.state === 'delivered') await this.refresh();
+    return delivery;
+  }
+
+  private async loadOutbox(): Promise<void> {
+    try {
+      this.noteOutbox(await this.opts.api.outbox());
+    } catch (err) {
+      console.warn('[journey] the outbox is unreadable right now — keeping the last list', err);
+    }
+  }
+
+  private async loadStatus(): Promise<JourneyStatus | null> {
+    try {
+      const status = await this.opts.api.status();
+      if (status !== null) this.set({ problem: null });
+      return status;
+    } catch (err) {
+      // v3: JS Journey does not know this copy's course id. Visible (menu), not "offline": that silence is
+      // how the 2026-10-05 sign-off vanished unnoticed. The cached status still feeds This week / Due.
+      if (err instanceof ApiError && err.problem !== null) this.set({ problem: err.problem });
+      console.warn('[journey] plan status unavailable — keeping the last copy', err);
+      return null;
+    }
+  }
+
   private async load(): Promise<void> {
+    // The outbox is LOCAL and holds updates whether or not she is connected (v3): always read it.
+    const outbox = this.loadOutbox();
     if (!this.opts.isConnected()) {
       // Not a fetch: leave lastFetchAt alone, so the first focus after connecting refetches at once
       // instead of waiting out the 5 min (App.tsx also refreshes the moment she connects).
-      this.set({ loaded: true });
+      await outbox;
+      this.set({ loaded: true, problem: null });
       return;
     }
     this.lastFetchAt = this.now();
     const [status, feed] = await Promise.all([
-      this.opts.api.status().catch((err: unknown) => {
-        console.warn('[journey] plan status unavailable — keeping the last copy', err);
-        return null;
-      }),
+      this.loadStatus(),
       this.opts.api.feed().catch((err: unknown) => {
         console.warn('[journey] feed unavailable — keeping the last copy', err);
         return null;
       }),
+      outbox,
     ]);
     if (status !== null) writeJson(this.opts.storage, this.keys.status, status);
     if (feed !== null) writeJson(this.opts.storage, this.keys.feed, feed.feed);

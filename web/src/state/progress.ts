@@ -1,10 +1,12 @@
 // The per-profile progress store (spec "Progress & storage"):
 // - localStorage `cp:<course>:<profile>:progress` is primary and is written on every change;
-// - the SSD copy (GET/PUT /api/progress/:profile) follows, debounced 2 s (max 30 s while the study
-//   ticker keeps changing things), so progress follows the drive to any Mac and survives a cleared browser;
+// - the SSD copy (GET/PUT /api/progress/:profile) follows, debounced 2 s (max 30 s while a playing
+//   video keeps saving its position), so progress follows the drive to any Mac and survives a cleared browser;
 // - on boot the copy with the larger updatedAt wins (LWW, same rule as server/store.ts pickNewer).
 // - until that boot read (hydrate) settles, changes stay in memory: they are replayed on top of a newer
 //   SSD copy instead of stamping the local copy "newest" and overwriting the SSD (see update()).
+// - a 2nd window of the app does NOT follow this key (unlike the study session — state/study.ts adopt):
+//   each window writes its own copy whole, so the one that writes last wins (CLAUDE.md failure log).
 import { createContext, useContext, useSyncExternalStore } from 'react';
 import type { ProgressState } from '../../../shared/types';
 import * as api from '../lib/api';

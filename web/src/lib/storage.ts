@@ -52,13 +52,16 @@ export function readString(store: KeyValueStore | null, key: string): string | n
   }
 }
 
-export function writeString(store: KeyValueStore | null, key: string, value: string | null): void {
-  if (store === null) return;
+/** true = written (or removed); false = no storage, or the write threw (logged). */
+export function writeString(store: KeyValueStore | null, key: string, value: string | null): boolean {
+  if (store === null) return false;
   try {
     if (value === null) store.removeItem(key);
     else store.setItem(key, value);
+    return true;
   } catch (err) {
     console.warn(`[storage] could not write ${key}`, err);
+    return false;
   }
 }
 
@@ -71,8 +74,8 @@ export interface Saver {
 }
 
 /**
- * Debounce with a max wait. A plain 2 s debounce never fires while a video plays — the study ticker
- * changes progress every second — so the SSD copy would lag a whole viewing session behind.
+ * Debounce with a max wait. A plain 2 s debounce never fires while a video plays — the player saves its
+ * position every 5 s — so the SSD copy would lag a whole viewing session behind.
  */
 export function createSaver(save: () => void, opts: { delayMs: number; maxWaitMs: number }): Saver {
   let quiet: ReturnType<typeof setTimeout> | null = null;

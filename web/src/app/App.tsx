@@ -1,12 +1,11 @@
 // Boot → the learner's app (v2: one learner — the first profile in config.json; no picker, no
 // switching). Owns the global states (loading, not running, stopped) and the app-level flows:
-// Sign off / Quit → sign-off card → send → (quit: flush → stop the server).
+// the timer chip / Note to Rahul… / Quit → sign-off card → send → (quit: flush → stop the server).
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { BootPayload, Course, Profile } from '../../../shared/types';
-import { ApiError, getBoot, getFeed, getJourneyStatus, postFeedRead, postSession, putProgressSnapshot, quitServer } from '../lib/api';
+import type { BootPayload, Course, Profile, ProgressState } from '../../../shared/types';
+import { ApiError, getBoot, getFeed, getJourneyStatus, getOutbox, postFeedRead, postSession, putProgressSnapshot, quitServer, retryOutbox } from '../lib/api';
 import { indexCourse } from '../lib/course';
 import { parseHash, useHash, type Route } from '../lib/router';
-import type { SignOffTarget } from '../lib/session';
 import { buildSnapshot } from '../lib/snapshot';
 import { browserStore } from '../lib/storage';
 import { HomeScreen } from '../screens/home/HomeScreen';
@@ -55,26 +54,38 @@ export function App() {
   if (boot.kind === 'loading') return <LoadingScreen />;
   if (boot.kind === 'failed') return <BootFailed message={boot.message} onRetry={() => setAttempt((n) => n + 1)} />;
   if (profile === null) return <NoProfiles />;
-  return <LearnerApp key={profile.id} course={boot.data.course} profile={profile} route={route} onProfile={setProfile} onStopped={() => setStopped(true)} />;
+  return (
+    <LearnerApp
+      key={profile.id}
+      course={boot.data.course}
+      folderCourseId={boot.data.folderCourseId}
+      profile={profile}
+      route={route}
+      onProfile={setProfile}
+      onStopped={() => setStopped(true)}
+    />
+  );
 }
 
 interface LearnerAppProps {
   course: Course;
+  /** BootPayload.folderCourseId: v2 study state may sit under it (state/study.ts migrateLegacy) */
+  folderCourseId: string;
   profile: Profile;
   route: Route;
   onProfile: (p: Profile) => void;
   onStopped: () => void;
 }
 
-type CardState = { targets: SignOffTarget[]; quitting: boolean };
+type CardState = { mode: 'session' | 'note'; quitting: boolean };
 
-function LearnerApp({ course, profile, route, onProfile, onStopped }: LearnerAppProps) {
+function LearnerApp({ course, folderCourseId, profile, route, onProfile, onStopped }: LearnerAppProps) {
   const index = useMemo(() => indexCourse(course), [course]);
   const connected = useRef(profile.journeyConnected);
   connected.current = profile.journeyConnected;
   const isConnected = useCallback(() => connected.current, []);
   const [store] = useState(() => new ProgressStore({ courseId: course.id, profile: profile.id, storage: browserStore() }));
-  const snapshot = useCallback(() => buildSnapshot(course, index, store.get(), Date.now()), [course, index, store]);
+  const snapshot = useCallback((state?: ProgressState) => buildSnapshot(course, index, state ?? store.get(), Date.now()), [course, index, store]);
   const [journey] = useState(
     () =>
       new JourneyStore({
@@ -82,7 +93,13 @@ function LearnerApp({ course, profile, route, onProfile, onStopped }: LearnerApp
         profile: profile.id,
         storage: browserStore(),
         isConnected,
-        api: { status: () => getJourneyStatus(profile.id), feed: () => getFeed(profile.id), read: (ids) => postFeedRead(profile.id, ids) },
+        api: {
+          status: () => getJourneyStatus(profile.id),
+          feed: () => getFeed(profile.id),
+          read: (ids) => postFeedRead(profile.id, ids),
+          outbox: (waitMs) => getOutbox(profile.id, { waitMs }),
+          retry: (ids) => retryOutbox(profile.id, ids),
+        },
       }),
   );
   const [pusher] = useState(() => new SnapshotPusher({ build: snapshot, put: (s, o) => putProgressSnapshot(profile.id, s, o), isConnected }));
@@ -90,12 +107,14 @@ function LearnerApp({ course, profile, route, onProfile, onStopped }: LearnerApp
     () =>
       new StudyController({
         courseId: course.id,
+        legacyCourseId: folderCourseId,
         profile: profile.id,
         progress: store,
         index,
         storage: browserStore(),
-        isConnected,
-        send: (s) => postSession(profile.id, s),
+        // v3: handed to the outbox connected or not (v2 skipped the POST when not connected and forgot
+        // the session). Its 202 answer lists the update at once as "Waiting to send".
+        send: async (s) => journey.noteOutbox(await postSession(profile.id, s)),
         snapshot,
       }),
   );
@@ -115,16 +134,13 @@ function LearnerApp({ course, profile, route, onProfile, onStopped }: LearnerApp
     void store.hydrate().then(() => {
       if (!live) return;
       setHydrated(true);
-      // The 24 h rule HERE, not in study.start(): its update carries her snapshot, which must come from
-      // the hydrated copy (takenAt = now, so JS Journey keeps it as the newest) — and it must take those
-      // sessions out of the queue BEFORE the card below reads it, or the card asks for a note on a
-      // session already on its way and her note is dropped (2026-10-01 review, state/study.ts).
-      study.autoClose();
-      // The next app open after closing it without signing off: the card asks for that session's note.
-      const earlier = study.queue().filter((t) => t.kind === 'pending');
-      if (earlier.length > 0 && connected.current) setCard((c) => c ?? { targets: earlier, quitting: false });
     });
     const stop = study.start();
+    // v2 sessions left in this browser go to the outbox once (lib/legacy.ts); it waits for hydrate itself
+    // (their snapshot must be the SSD copy), then lists them under "Your updates".
+    void study.migrateLegacy().then((sent) => {
+      if (live && sent > 0) void journey.refresh();
+    });
     void journey.refresh();
     const wait = window.setTimeout(() => setFeedWait(false), FEED_WAIT_MS);
     // Progress changes → her snapshot for the coach, ≤ 1 per 5 min (lib/snapshot.ts). Only after hydrate:
@@ -186,26 +202,28 @@ function LearnerApp({ course, profile, route, onProfile, onStopped }: LearnerApp
     onStopped();
   }, [store, pusher, onStopped]);
 
-  const openSignOff = useCallback(() => setCard((c) => c ?? { targets: study.queue(), quitting: false }), [study]);
+  const openSignOff = useCallback(() => setCard((c) => c ?? { mode: study.getState().session === null ? 'note' : 'session', quitting: false }), [study]);
+  const openNote = useCallback(() => setCard((c) => c ?? { mode: 'note', quitting: false }), []);
 
   const quit = useCallback(() => {
-    if (study.hasUnsigned()) setCard({ targets: study.queue(), quitting: true });
+    if (study.getState().session !== null) setCard({ mode: 'session', quitting: true });
     else void stopServer();
   }, [study, stopServer]);
 
+  // The card says whether to quit (its own outcome) — App never re-reads `card` here: a stale
+  // `quitting: true` once stopped the server after she chose "keep studying" (2026-10-01 review).
   const cardDone = (outcome: SignOffOutcome): void => {
-    const wasQuitting = card?.quitting ?? false;
     setCard(null);
     if (outcome.sent > 0) {
       void pusher.pushNow();
       void journey.refresh(); // his feed after a sign-off (the update now shows in "Your updates")
     }
-    if (wasQuitting && outcome.completed) void stopServer();
+    if (outcome.quit) void stopServer();
   };
 
   const value: AppValue = useMemo(
-    () => ({ course, index, profile, openSignOff, quit, updateProfile: onProfile }),
-    [course, index, profile, openSignOff, quit, onProfile],
+    () => ({ course, index, profile, openSignOff, openNote, quit, updateProfile: onProfile }),
+    [course, index, profile, openSignOff, openNote, quit, onProfile],
   );
 
   if (!hydrated || feedWait) return <LoadingScreen />;
@@ -215,7 +233,7 @@ function LearnerApp({ course, profile, route, onProfile, onStopped }: LearnerApp
         <JourneyContext.Provider value={journey}>
           <StudyContext.Provider value={study}>
             {route.name === 'watch' ? <WatchScreen id={route.id} /> : route.name === 'updates' ? <UpdatesScreen /> : <HomeScreen />}
-            {card && <SignOffCard targets={card.targets} quitting={card.quitting} onDone={cardDone} />}
+            {card && <SignOffCard mode={card.mode} quitting={card.quitting} onDone={cardDone} />}
           </StudyContext.Provider>
         </JourneyContext.Provider>
       </ProgressContext.Provider>
