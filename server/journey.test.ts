@@ -173,6 +173,29 @@ describe('validation', () => {
     expect(p([])).not.toBeNull();
   });
 
+  it('validateProgressSnapshot: doneLectures (v4) is optional; keys are section numbers, values ascending unique lecture numbers, bounded', () => {
+    const p = (doneLectures: unknown): string | null => validateProgressSnapshot({ ...snapshot(1), doneLectures }, 'react-2023');
+    expect(validateProgressSnapshot(snapshot(1), 'react-2023')).toBeNull(); // an older player sends none
+    expect(p({})).toBeNull();
+    expect(p({ '1': [1, 2, 3], '7': [1], '31': [4, 9] })).toBeNull();
+    expect(p(null)).toMatch(/doneLectures/);
+    expect(p([[1, 2]])).toMatch(/doneLectures/);
+    for (const key of ['0', '07', '-1', '1.5', 'seven', '', ' 7', '10000']) expect(p({ [key]: [1] }), key).toMatch(/doneLectures/);
+    expect(p({ '7': [] })).toMatch(/doneLectures/); // the player never sends an empty list
+    expect(p({ '7': [2, 1] })).toMatch(/doneLectures/); // not ascending
+    expect(p({ '7': [1, 1] })).toMatch(/doneLectures/); // not unique
+    expect(p({ '7': [0, 1] })).toMatch(/doneLectures/); // lecture numbers start at 1
+    expect(p({ '7': [1, 2.5] })).toMatch(/doneLectures/);
+    expect(p({ '7': ['1'] })).toMatch(/doneLectures/);
+    expect(p({ '7': 1 })).toMatch(/doneLectures/);
+    expect(p({ '7': Array.from({ length: 1000 }, (_, i) => i + 1) })).toBeNull();
+    expect(p({ '7': Array.from({ length: 1001 }, (_, i) => i + 1) })).toMatch(/doneLectures/);
+    expect(p(Object.fromEntries(Array.from({ length: 200 }, (_, i) => [String(i + 1), [1]])))).toBeNull();
+    expect(p(Object.fromEntries(Array.from({ length: 201 }, (_, i) => [String(i + 1), [1]])))).toMatch(/doneLectures/);
+    // inside an update's progress too
+    expect(validateSession(session('s-1', { progress: { ...snapshot(1), doneLectures: { '7': [3, 2] } } }), 'react-2023')).toMatch(/progress: doneLectures/);
+  });
+
   it('parseReadIds wants 1–500 message ids — uuids, as JS Journey checks — and dedups them', () => {
     expect(parseReadIds({ ids: [M_REPLY, M_NOTE, M_REPLY] })).toEqual({ ok: true, ids: [M_REPLY, M_NOTE] });
     for (const bad of [null, {}, { ids: [] }, { ids: M_REPLY }, { ids: [''] }, { ids: [7] }, { ids: ['r-wed'] }, { ids: [M_REPLY, 'x'.repeat(36)] }]) {
@@ -223,6 +246,42 @@ describe('validation', () => {
     expect(parseJourneyStatus({ ...status, planBreak: { ...diwali, start: '1 Nov' } })).toBeNull();
     expect(parseJourneyStatus({ ...status, planBreak: { ...diwali, end: undefined } })).toBeNull();
     expect(parseJourneyStatus({ ...status, planBreak: { ...diwali, start: '2026-11-16' } })).toBeNull(); // ends before it starts
+  });
+
+  it('parseJourneyStatus keeps the v4 fields (startDate, dailyGoalMinutes, projection) when well-formed', () => {
+    const projection = { finish: '2026-11-27', studyDaysLeft: 30, minutesPerStudyDay: 85.4, vsTarget: 20 };
+    const v4 = { ...status, startDate: '2026-10-05', dailyGoalMinutes: 150, projection };
+    expect(parseJourneyStatus(v4)).toEqual(v4);
+    expect(parseJourneyStatus({ ...v4, projection: null })).toEqual({ ...v4, projection: null });
+    expect(parseJourneyStatus({ ...v4, projection: { ...projection, vsTarget: -12 } })?.projection?.vsTarget).toBe(-12);
+    // a JS Journey deployed before them: none of the three, the status itself unchanged
+    expect(parseJourneyStatus(status)).toEqual(status);
+    expect(parseJourneyStatus(status)).not.toHaveProperty('projection');
+  });
+
+  it('parseJourneyStatus drops a malformed v4 field on its own (display-only, like plan) — never the status', () => {
+    const projection = { finish: '2026-11-27', studyDaysLeft: 30, minutesPerStudyDay: 85, vsTarget: 20 };
+    const v4 = { ...status, startDate: '2026-10-05', dailyGoalMinutes: 150, projection };
+    const drops = (over: Record<string, unknown>, field: string): void => {
+      const parsed = parseJourneyStatus({ ...v4, ...over });
+      expect(parsed, JSON.stringify(over)).not.toBeNull();
+      expect(parsed, JSON.stringify(over)).not.toHaveProperty(field);
+      expect(parsed?.week).toBe(status.week);
+    };
+    drops({ startDate: '5 Oct' }, 'startDate');
+    drops({ startDate: 20261005 }, 'startDate');
+    drops({ dailyGoalMinutes: 0 }, 'dailyGoalMinutes');
+    drops({ dailyGoalMinutes: -150 }, 'dailyGoalMinutes');
+    drops({ dailyGoalMinutes: '150' }, 'dailyGoalMinutes');
+    drops({ dailyGoalMinutes: 1441 }, 'dailyGoalMinutes'); // more than a day
+    drops({ projection: 'soon' }, 'projection');
+    drops({ projection: { ...projection, finish: '27 Nov' } }, 'projection');
+    drops({ projection: { ...projection, studyDaysLeft: -1 } }, 'projection');
+    drops({ projection: { ...projection, studyDaysLeft: 2.5 } }, 'projection');
+    drops({ projection: { ...projection, minutesPerStudyDay: Number.NaN } }, 'projection');
+    drops({ projection: { ...projection, minutesPerStudyDay: -3 } }, 'projection');
+    drops({ projection: { ...projection, vsTarget: 1.5 } }, 'projection');
+    drops({ projection: { ...projection, vsTarget: undefined } }, 'projection');
   });
 
   it('isJourneyFeed checks updates, replies, notes, the unread count and the cursor', () => {
