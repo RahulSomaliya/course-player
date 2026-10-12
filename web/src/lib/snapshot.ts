@@ -24,7 +24,8 @@ export function buildSnapshot(course: Course, index: CourseIndex, state: Progres
       if (!state.lectures[l.id]?.done) continue;
       lecturesDone++;
       videoSecondsDone += l.duration;
-      done.add(l.number);
+      // a "00 …" file parses as lecture 0: both validators refuse < 1 and would drop the WHOLE snapshot
+      if (l.number >= 1) done.add(l.number);
     }
     if (isSectionDone(s, state.lectures)) sectionsDone.push(s.number);
     // v4 (the coach page's week → section → lecture view): ascending + unique — the local server and JS

@@ -57,6 +57,17 @@ describe('buildSnapshot (the coach sees exactly her numbers)', () => {
     expect(buildSnapshot(dup, indexCourse(dup), both, NOW).doneLectures).toEqual({ '5': [3] });
   });
 
+  // Review 2026-10-12: a file named "00 …" parses as lecture 0; both validators refuse < 1 and would drop
+  // the WHOLE snapshot (the coach's numbers stop updating). Lecture 0 is left out of doneLectures only.
+  it('doneLectures never carries a lecture number below 1 (it would sink the whole snapshot)', () => {
+    const zero = course([section(2, 'Zero', [{ title: 'Intro' }, { title: 'Next' }])]);
+    const z = { ...zero, sections: zero.sections.map((s) => ({ ...s, lectures: s.lectures.map((l, i) => ({ ...l, number: i })) })) };
+    const all = progressWith(Object.fromEntries(z.sections[0]!.lectures.map((l) => [l.id, { done: true }])));
+    const snap = buildSnapshot(z, indexCourse(z), all, NOW);
+    expect(snap.doneLectures).toEqual({ '2': [1] });
+    expect(snap.lecturesDone).toBe(2); // still counted as done everywhere else
+  });
+
   it('keeps only the last 120 days of study time (whole seconds, no empty days)', () => {
     const p = progressWith({}, { days: { '2026-10-01': 60, '2026-06-04': 900, '2026-06-03': 900, '2026-09-01': 0 } });
     const days = buildSnapshot(c, idx, p, NOW).days;
