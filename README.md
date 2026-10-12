@@ -2,7 +2,8 @@
 
 Mansi's offline app for Jonas's React course. It runs from Rahul's SSD on any Mac, with nothing to
 install. Her sign-offs go to Rahul's coach page in JS Journey (https://js-journey-ten.vercel.app).
-Spec: `docs/spec.md` + `docs/spec-v2-coaching.md` + `docs/spec-v3-study-timer.md`. Developer notes: `CLAUDE.md`.
+Spec: `docs/spec.md` + `docs/spec-v2-coaching.md` + `docs/spec-v3-study-timer.md` + `docs/spec-v4-pace-and-coach.md`.
+Developer notes: `CLAUDE.md` and "Developer notes" at the end.
 
 ## Connect the two apps (once)
 
@@ -69,3 +70,16 @@ An update is never thrown away: it is **queued** (not sent yet — offline, or n
   `delivered` = the last 50 receipts). It holds no token — her link is in `config.json`; keep that private.
 - "course not recognised" / `HTTP 400 — course "…" is not a JS Journey course`: her copy has a wrong
   course id — copy `.player/course.json` from the SSD (step 2), then restart.
+
+## Developer notes
+**Course outline for JS Journey.** The coach page's plan (week → section → lecture) reads the React
+course's titles, numbers, kinds and lengths from `lib/outline/react-2023.json` in JS Journey. When the
+course's files change, regenerate it here and commit it there:
+```sh
+npx tsx scripts/export-outline.mts "/Volumes/Rahul's SSD/Courses/Coding FE/React 2023" \
+  --out ~/Developer/js-journey/lib/outline/react-2023.json
+```
+It only reads the course (the same scan the app runs at start-up). Its durations cache goes to a temp dir
+that is deleted afterwards (`--cache <dir>` keeps one between runs) — never the SSD's `.player/data`; an
+`--out` or `--cache` inside the course folder is refused. The course id comes from `.player/course.json`
+(or `--course-id react-2023`). Everything else for developers: `CLAUDE.md`.
