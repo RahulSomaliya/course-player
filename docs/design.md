@@ -22,8 +22,10 @@ a raw colour anywhere in `web/src/**/*.tsx` is a bug (it breaks the other theme)
 | `ink-subtle` | `0.53 0.012 70` (5.1 / 5.2 / 4.6:1) | `0.64 0.01 75` (5.7 / 5.3 / 4.6:1) | tertiary TEXT: durations, numbers, axis ticks, stat hints — must stay AA on fill too |
 | `accent` | `0.56 0.17 42` | `0.72 0.16 50` | THE accent: primary action, progress, done, today |
 | `on-accent` | `0.99 0.005 80` (4.9:1) | `0.18 0.02 50` (7.2:1) | text/icons on an accent fill |
-| `accent-ink` | `0.48 0.15 40` | `0.80 0.13 55` | accent-hued text (pace pill, links in articles) |
+| `accent-ink` | `0.48 0.15 40` | `0.80 0.13 55` | accent-hued text (links in articles, "Stuck", Daily goal met) |
 | `accent-soft` | `0.95 0.035 55` | `0.29 0.05 50` | tinted pill background |
+| `success-ink` | `0.45 0.10 155` | `0.82 0.11 155` | the pace pill's text when she is ahead / on track |
+| `success-soft` | `0.95 0.04 155` | `0.29 0.05 155` | the pace pill's background then — a calm green: good news never wears the accent (orange read as a warning, Rahul 2026-10-12) |
 | `chart-bar` | `0.66 0.012 70` (3.1:1) | `0.52 0.01 75` (3.2:1) | 30-day bars of days under her daily goal, today included (goal-met days = `accent`; no goal known = v3: today `accent`) |
 | `ring` | = accent | = accent | focus ring |
 | `scrim` | ink @ 40% | black-ish @ 60% | dialog backdrop |
@@ -127,7 +129,8 @@ study-timer chip and its dot, plan marks, progress) — screenshots catch them m
   running → a `rounded-full` chip "● 1h 23m" (static 8 px accent dot, tabular time, updates every 15 s)
   that reads "Sign off" on hover AND keyboard focus. Both labels share one grid cell, so the swap never
   moves its neighbours; its accessible name always says both ("Sign off — studying for 1 h 23 min").
-- **Pills** — pace (`accent-soft` / `accent-ink`; behind = `fill` / `ink`), "Stuck" (same accent pill).
+- **Pills** — pace: ahead / on track = `success-soft` / `success-ink` (green = good news; the orange accent read as a
+  warning), behind = `fill` / `ink` (never red). "Stuck" = `accent-soft` / `accent-ink`.
 
 ## Screens
 

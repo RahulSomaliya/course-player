@@ -55,7 +55,7 @@ export function ThisWeek({ status }: { status: JourneyStatus | null }) {
           {w.pace && (
             <span
               className={`inline-flex h-7 shrink-0 items-center self-start rounded-full px-3 text-sm font-medium sm:self-center ${
-                w.pace.tone === 'good' ? 'bg-accent-soft text-accent-ink' : 'bg-fill text-ink'
+                w.pace.tone === 'good' ? 'bg-success-soft text-success-ink' : 'bg-fill text-ink'
               }`}
             >
               {w.pace.label}
