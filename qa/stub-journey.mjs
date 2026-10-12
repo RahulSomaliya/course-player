@@ -5,6 +5,9 @@
 // PUT progress. Fixture: a week of her updates (relative to today), 2 unread replies quoting her
 // notes, 1 unread standalone note, status with sectionDue / skippedSections / planBreak null.
 // The "diwali" variant sends the break (1–15 Nov 2026); QA fakes the browser clock into it.
+// v4 (docs/spec-v4-pace-and-coach.md): status carries startDate, dailyGoalMinutes (150 = 2.5 h — the
+// goal-met bars and "Daily goal met") and a projection (the line at the bottom of This week); plan goals
+// read "07 …", never "§07 …".
 // v3 (docs/spec-v3-study-timer.md): status carries `plan` (the coach page's rows) + the plan calendar;
 // an unknown course answers 404 "unknown course" like JS Journey (the player matches that text); and
 // POST /__stub/reject {on: true} makes POST sessions refuse every update that way (the "Didn't reach
@@ -68,7 +71,7 @@ function plan(current) {
     if (due > DIWALI.end && !rows.some((r) => r.kind === 'break')) rows.push({ kind: 'break', label: 'Diwali', ...DIWALI, now: variant === 'diwali' });
     const last = sections[sections.length - 1];
     const state = week < current ? 'done' : week === current ? 'current' : 'upcoming';
-    rows.push({ kind: 'week', week, due, goal: `§${last} ${SECTION_TITLES[last]}`, state });
+    rows.push({ kind: 'week', week, due, goal: `${String(last).padStart(2, '0')} ${SECTION_TITLES[last]}`, state });
   });
   return rows;
 }
@@ -83,6 +86,12 @@ function status() {
     skippedSections: [4],
     studyWeekdays: [1, 2, 3, 4, 5],
     planBreaks: [{ label: 'Diwali break', ...DIWALI }],
+    // v4
+    startDate: '2026-10-05',
+    dailyGoalMinutes: 150,
+    // = what JS Journey computed for her on Mon 12 Oct 2026 → "At your pace — about 1h 31m of lectures a study
+    // day — you’ll finish around Wed 16 Dec, 1 week before your target."
+    projection: { finish: '2026-12-16', studyDaysLeft: 38, minutesPerStudyDay: 91, vsTarget: 7 },
   };
   if (variant === 'diwali') {
     return {

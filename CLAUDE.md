@@ -7,6 +7,7 @@ Design decisions: `docs/design.md`. First course: `/Volumes/Rahul's SSD/Courses/
 - install: `npm install --cache <scratchpad>/npm-cache` (`~/.npm` is root-owned; new deps need `--before=$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)` — see global CLAUDE.md)
 - dev: `COURSE_ROOT="/Volumes/Rahul's SSD/Courses/Coding FE/React 2023" npm run dev:server` + `npm run dev:web` (Vite 5173 proxies to 8795)
 - test: `npm test` (vitest) · typecheck: `npm run typecheck` · build web: `npm run build`
+- course outline for JS Journey: `npx tsx scripts/export-outline.mts "<course root>" --out <file.json>` (read-only; README "Developer notes")
 - single executables: `npm run build:sea` · ship to SSD: `npm run deploy -- "<course root>" [label] [--course-id <id>]`
   (writes `.player/course.json`; updating Mansi's own copy = README "Update Mansi's copy", never her `.player/data`)
 
@@ -36,7 +37,10 @@ Design decisions: `docs/design.md`. First course: `/Volumes/Rahul's SSD/Courses/
 | "course not recognised" | `JourneyProblem` — 409 from status + connect; `ApiError.problem` in the web |
 | study timer (wall clock), Send, Discard, v2 → v3 migration | `web/src/state/study.ts` (+ `lib/session.ts`, `lib/legacy.ts`), `screens/SignOffCard.tsx`, `components/StudyTimer.tsx` (Start studying, chip, notice) |
 | feed, Got it, snapshot push | `web/src/state/journey.ts`, `web/src/lib/feed.ts` |
+| pace + projection ("At your pace … you’ll finish around Fri 27 Nov" — curly apostrophe, as JS Journey prints it) | JS Journey computes both (`lib/status.ts`); the player only prints them: `web/src/lib/week.ts` paceOf / projectionLine (= JS Journey `lib/journey-view.ts`, one test table) → `screens/home/ThisWeek.tsx` |
 | study time / stats | `ProgressState.days` written ONLY at sign-off (`lib/session.ts` `splitAcrossDays` → `lib/progress.ts` `withStudyDays`); running timer shown via `state/study.ts` `useStudyDays`; stats in `web/src/lib/stats.ts` |
+| stats row + 30-day chart, daily goal (v4) | `screens/home/StudyNumbers.tsx` reads the days once and owns the ONE goal moment (`lib/goal-moment.ts`, remembered per date) → `Stats` (Today ✓ "Daily goal met") + `ThirtyDays` (goal-met bars, avg); rules in `lib/stats.ts` studyAverage / goalMet |
+| React outline JSON that JS Journey commits (`lib/outline/react-2023.json` there) | `scripts/export-outline.mts` — read-only scan, durations cache in a temp dir, refuses `--out`/`--cache` inside the course (README "Developer notes") |
 | player | `web/src/player/` |
 
 ## Errors & logging
@@ -104,6 +108,15 @@ the JS Journey token. Clients get a status code + short message. Web shows calm 
   shown nor acknowledged); his notes sit in "Your updates" (`withNotes`: her web page marks a note read on
   sight, so it is lost here otherwise); the pace pill and the Due word come from `daysDelta` alone
   (`lib/week.ts` paceOf — a separate word map printed a bare "Behind"). Change both apps together.
+- The 30-day "avg" and "goal met" are MIRRORS of JS Journey `lib/stats.ts` (`studyAverage` / `goalMet`, one
+  test table): total seconds from `startDate` (none → her first ≥ 5 min day) ÷ plan STUDY days to today,
+  today counted only at ≥ 5 min — the mean of all 30 bars read "avg 24m" for her 2 h days (2026-10-12).
+  Goal met = ≥ `dailyGoalMinutes`; absent → no goal visuals at all. Decide the goal moment ONCE
+  (`StudyNumbers`): per component, the first remembers the date and the second never plays.
+- No "§" anywhere she reads (Rahul, 2026-10-12): a section is "09", never "§09" — goal line, update
+  facts, sign-off summary, Watch "Next:", plan rows, course content. Numbers go through `lib/format.ts`
+  `sectionNumberLabel` (= JS Journey `lib/format.ts` `sectionTag`) or `section.id`; plan rows come from
+  JS Journey as text, and a pre-v4 one still says "§07" — `lib/plan.ts` planView strips it.
 - The streak counts STUDY days (`web/src/lib/stats.ts` `streak` = JS Journey `lib/stats.ts`, one test table): a
   calendar-day streak reset every weekend and all of Diwali (2026-10-01). It walks `JourneyStatus.studyWeekdays` +
   `planBreaks` (`studyCalendar`; a status cached before them is filled in `state/journey.ts`; no status → Mon–Fri);

@@ -2,17 +2,19 @@
 // Due = her plan's course target date + a pace word (lib/week.ts dueStat); not connected and nothing
 // cached → it is omitted. On the first paint of home the numbers count up from 0 (CountUp) — once the
 // row is in view, not at mount (it is usually below the fold).
+// v4 daily goal (docs/spec-v4-pace-and-coach.md "Chart + daily goal"): Today met → a small accent ✓ and
+// "Daily goal met" (accent-ink) under the number; not met → the number alone, nothing marks a short day.
+// `met` / `moment` come from StudyNumbers, which owns the one goal moment shared with the chart.
 import { useMemo, useRef, type ReactNode } from 'react';
 import type { JourneyStatus } from '../../../../shared/types';
 import { useApp } from '../../app/context';
 import { CountUp } from '../../components/CountUp';
-import { todayKey } from '../../lib/dates';
+import { GoalCheck } from '../../components/ui';
 import { formatDuration } from '../../lib/format';
 import { useSeenOnce } from '../../lib/motion';
 import { completion, streak, studiedOn, studyCalendar } from '../../lib/stats';
 import { activeBreak, dueStat } from '../../lib/week';
 import { useProgress } from '../../state/progress';
-import { useStudyDays } from '../../state/study';
 
 const pctLabel = (pct: number): string => (pct > 0 && pct < 1 ? '<1%' : `${Math.floor(pct)}%`);
 const days = (n: number): string => {
@@ -20,12 +22,21 @@ const days = (n: number): string => {
   return `${whole} ${whole === 1 ? 'day' : 'days'}`;
 };
 
-export function Stats({ status, intro }: { status: JourneyStatus | null; intro: boolean }) {
+interface Props {
+  status: JourneyStatus | null;
+  intro: boolean;
+  /** ProgressState.days + the running timer (display only — days are written at sign-off, state/study.ts) */
+  days: Record<string, number>;
+  today: string;
+  /** today is at or over JourneyStatus.dailyGoalMinutes (lib/stats.ts goalMet; no goal → false) */
+  met: boolean;
+  /** the once-a-day goal moment is playing on this mount (lib/goal-moment.ts) */
+  moment: boolean;
+}
+
+export function Stats({ status, intro, days: daysStudied, today, met, moment }: Props) {
   const { course } = useApp();
-  // + the running timer (display only — days are written at sign-off, state/study.ts)
-  const daysStudied = useStudyDays();
   const lectures = useProgress((s) => s.lectures);
-  const today = todayKey();
   const done = useMemo(() => completion(course, lectures), [course, lectures]);
   // study days, not calendar days: a quiet weekend or Diwali no longer resets it (lib/stats.ts)
   const run = streak(daysStudied, today, studyCalendar(status));
@@ -36,27 +47,42 @@ export function Stats({ status, intro }: { status: JourneyStatus | null; intro: 
   const nudge = run === 0 && (status === null || activeBreak(status, today) === null);
   const row = useRef<HTMLDListElement>(null);
   const play = useSeenOnce(row, intro);
+  // the goal moment waits until the row is in view, like the count-up (docs/design.md motion table)
+  const momentSeen = useSeenOnce(row, moment);
 
   return (
     <dl ref={row} className={`grid grid-cols-2 gap-y-8 border-y border-line py-6 ${due ? 'md:grid-cols-4' : 'md:grid-cols-3'} md:gap-y-0`}>
-      <Stat label="Today" value={<CountUp value={studiedOn(daysStudied, today)} format={formatDuration} animate={intro} play={play} />} />
-      <Stat label="Streak" value={<CountUp value={run} format={days} animate={intro} play={play} />} hint={nudge ? '5 min a day counts' : undefined} />
       <Stat
+        name="today"
+        label="Today"
+        value={<CountUp value={studiedOn(daysStudied, today)} format={formatDuration} animate={intro} play={play} />}
+        hint={
+          met ? (
+            <span data-goal-met className="inline-flex items-center gap-1 text-accent-ink">
+              <GoalCheck className="size-3.5" draw={moment} hold={!momentSeen} />
+              Daily goal met
+            </span>
+          ) : undefined
+        }
+      />
+      <Stat name="streak" label="Streak" value={<CountUp value={run} format={days} animate={intro} play={play} />} hint={nudge ? '5 min a day counts' : undefined} />
+      <Stat
+        name="complete"
         label="Complete"
         value={<CountUp value={done.percent} format={pctLabel} animate={intro} play={play} />}
         hint={`${done.doneLectures} / ${done.totalLectures} lectures`}
       />
-      {due && <Stat label="Due" value={due.value} hint={due.hint} />}
+      {due && <Stat name="due" label="Due" value={due.value} hint={due.hint} />}
     </dl>
   );
 }
 
-function Stat({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
+function Stat({ name, label, value, hint }: { name: string; label: string; value: ReactNode; hint?: ReactNode }) {
   return (
-    <div className="px-1 md:border-l md:border-line md:px-6 md:first:border-l-0 md:first:pl-1">
+    <div data-stat={name} className="px-1 md:border-l md:border-line md:px-6 md:first:border-l-0 md:first:pl-1">
       <dt className="text-sm text-ink-muted">{label}</dt>
       <dd className="mt-1 text-2xl font-semibold tabular-nums text-ink">{value}</dd>
-      {hint && <dd className="mt-1 text-sm text-ink-subtle">{hint}</dd>}
+      {hint !== undefined && <dd className="mt-1 text-sm text-ink-subtle">{hint}</dd>}
     </div>
   );
 }

@@ -24,7 +24,7 @@ a raw colour anywhere in `web/src/**/*.tsx` is a bug (it breaks the other theme)
 | `on-accent` | `0.99 0.005 80` (4.9:1) | `0.18 0.02 50` (7.2:1) | text/icons on an accent fill |
 | `accent-ink` | `0.48 0.15 40` | `0.80 0.13 55` | accent-hued text (pace pill, links in articles) |
 | `accent-soft` | `0.95 0.035 55` | `0.29 0.05 50` | tinted pill background |
-| `chart-bar` | `0.66 0.012 70` (3.1:1) | `0.52 0.01 75` (3.2:1) | past-day bars (today = `accent`) |
+| `chart-bar` | `0.66 0.012 70` (3.1:1) | `0.52 0.01 75` (3.2:1) | 30-day bars of days under her daily goal, today included (goal-met days = `accent`; no goal known = v3: today `accent`) |
 | `ring` | = accent | = accent | focus ring |
 | `scrim` | ink @ 40% | black-ish @ 60% | dialog backdrop |
 
@@ -95,7 +95,8 @@ study-timer chip and its dot, plan marks, progress) — screenshots catch them m
 | Home → Watch | the Continue thumbnail morphs into the player | View Transitions API, `view-transition-name: lecture-media` on both; group 340 ms ease-out; the page fades THROUGH, never across: old out 90 ms ease-in, new in 160 ms ease-out from 70 ms (a 180 ms cross-fade layered both pages' titles); header (`app-header`) swaps instantly | `lib/motion.ts navigateWithMorph`, `ContinueHero`, `Player`, `index.css` |
 | Section open / close | height 0fr ↔ 1fr, chevron turns 180° | `grid-template-rows` 220 ms; lecture rows `row-in` (opacity + 4 px rise, 220 ms) staggered 15 ms, capped at 12 rows; lectures mount only while open | `components/Collapse.tsx`, `LectureList` |
 | Lecture / section becomes done | the ✓ draws in (disc scales in first) | `draw` 260 ms after 60 ms (`stroke-dashoffset` 1 → 0, `pathLength=1`); `disc-in` 180 ms — **only on the change, never on first render** | `ui.tsx LectureMark`, `QuietCheck` |
-| First paint of home | Today / Streak / Complete count up; 30-day bars rise | WHEN EACH FIRST COMES INTO VIEW (≥ 40 % visible, `useSeenOnce`) — usually below the fold, so at mount they finished unseen; until then numbers show 0 and bars hold at 25 %. Count-up ≤ 700 ms ease-out-cubic from 0 (rAF; final value for screen readers); `bar-rise` 520 ms from 25 % height, 12 ms stagger. Once per page load, not on every return from Watch | `CountUp.tsx`, `Stats`, `ThirtyDays`, `HomeScreen`, `lib/motion.ts` |
+| Daily goal met (v4, once per DATE) | the Today ✓ draws in; the today bar turns `accent` (instantly — no colour transition) and lifts once; its ✓ draws in after | `goal-rise` 480 ms ease-out from 82 % height (`transform` only, a visible start); the bar's ✓ `draw` 260 ms from 300 ms — done ≤ 600 ms; the Today ✓ `draw` 260 ms after 60 ms. Decided on the first render home shows today met, or the render it crosses the goal (signed-off + the running timer); the date is remembered (`cp:<course>:<profile>:goal-moment`, storage wrapped), so a reload or a return from Watch shows it met, still. Held paused until in view (`useSeenOnce`); under reduced motion nothing moves (no held frames). No confetti, no toast. During the first-paint rise the bar keeps `bar-rise` and only the ✓ waits for it — when the moment is there AT that first paint; one crossed later on the same view lifts with `goal-rise` (`intro` stays true for the mount) | `lib/goal-moment.ts`, `StudyNumbers`, `Stats`, `ThirtyDays`, `ui.tsx GoalCheck` |
+| First paint of home | Today / Streak / Complete count up; 30-day bars rise (a goal-met bar's ✓ `arrive`s with it, from half its rise — never floating alone) | WHEN EACH FIRST COMES INTO VIEW (≥ 40 % visible, `useSeenOnce`) — usually below the fold, so at mount they finished unseen; until then numbers show 0 and bars hold at 25 %. Count-up ≤ 700 ms ease-out-cubic from 0 (rAF; final value for screen readers); `bar-rise` 520 ms from 25 % height, 12 ms stagger. Once per page load, not on every return from Watch | `CountUp.tsx`, `Stats`, `ThirtyDays`, `HomeScreen`, `lib/motion.ts` |
 | Continue thumbnail | the still frame settles in | transparent over the `player` box until decoded (`loadeddata`), then opacity 200 ms ease-out — no black box, then a pop | `ContinueHero` (`HeroFrame`) |
 | "From Rahul" arrives / Got it | soft rise; ✓ morph, then the block fades while it folds | `arrive` 300 ms; Got it → check 220 ms → fade 150 ms ease-OUT + fold 220 ms ease-IN (it starts 25–40 ms after the hold), done ≈ 470 ms after the click (inside the 500 ms input window, so it adds no CLS — a longer fold for tall cards measured 490–498 ms: too close). Fast fade over a slow-starting fold is why no half-clipped text is ever seen (the reverse pairing showed it at 70 % opacity) | `FromRahul.tsx`, `Collapse` |
 | Sign-off card | rises in; Send → "Sending…" → the confirmation, which stays until Done | `rise` 260 ms (opacity + 12 px + 0.985 scale); confirmation `arrive` 300 ms + its ✓ `check-in` 220 ms; close = scrim `fade-out` + card `leave` 180 ms. Busy = `aria-disabled` + no pointer events, never `disabled` (its 50 % look read as "undone"); `disabled` only for "nothing to send", with the reason under the button | `SignOffCard.tsx`, `Dialog.tsx` |
@@ -115,7 +116,7 @@ study-timer chip and its dot, plan marks, progress) — screenshots catch them m
   Three states only (v2 dropped the partly-watched arc).
 - **Section row (closed)** — number (`ink-subtle`, tabular) · title · a quiet accent ✓ (no disc) when
   100 % done. Length and due date appear on hover/focus in one right-aligned column; the current section
-  shows its due date always and a dot on its part's hairline; a skipped section (her plan, §04) is
+  shows its due date always and a dot on its part's hairline; a skipped section (her plan, 04) is
   `ink-subtle` with "Skipped" — unless she finished it: finished wins (a ✓, never both). No progress
   bars, counts or "Optional" badges.
 - **Part header** — overline "PART 1" (`text-xs` caps, `ink-muted`) · title (`text-lg` 600) · quiet
@@ -133,15 +134,18 @@ study-timer chip and its dot, plan marks, progress) — screenshots catch them m
 - **Home** — header · **From Rahul** (only when something is unread: a raised `surface` card, overline in
   `accent-ink`, his words big, each reply led by her quoted note, one secondary "Got it") · Continue hero
   (THE primary action) · **This week** (week, goal + due, pace pill — the course due date is the Due stat's
-  alone; on a break the break replaces the pace) · 4 stats in a quiet row (Today · Streak · Complete · **Due**, no cards,
-  hairline dividers) · 30-day bars · **Your updates** (latest 3, replies threaded under a hairline, "See
+  alone; on a break the break replaces the pace; v4: a quiet last line `text-sm ink-muted`, "At your pace —
+  about 1h 25m of lectures a study day — you’ll finish around **Fri 27 Nov**, 4 weeks before your target.",
+  the date the one `ink` 600 word, hidden while JS Journey sends no projection) · 4 stats in a quiet row (Today · Streak · Complete · **Due**, no cards,
+  hairline dividers; v4: Today at or over her daily goal adds a small accent ✓ + "Daily goal met" in
+  `accent-ink` under the number — under it, the number alone) · 30-day bars · **Your updates** (latest 3, replies threaded under a hairline, "See
   all"; a reply still unread is one quiet line "Rahul replied · above" — From Rahul shows it in full;
   updates still in the outbox on top: "Waiting to send" / "Didn't reach Rahul — reason · Try again")
   · course content. This week ends with a quiet "See full plan" (her plan, week by week, the break in
   place — the coach page's plan list in these tokens).
 - **#/updates** — every update + replies in the same layout, "Show more" pages with the feed cursor.
 - **Watch** — player + details left; the right sidebar (360 px) shows ONLY the current section: overline
-  "SECTION 07", title, due date, ‹ › to step sections, lectures, and "Next: §08 …" at the bottom.
+  "SECTION 07", title, due date, ‹ › to step sections, lectures, and "Next: 08 …" at the bottom.
   `T` = theatre.
 - **Sign-off card** — a dialog (max 512 px): "Nice work, Mansi"; a `sunken` panel with "**1h 23m** studied ·
   started 9:14 am" + a quiet "Edit time" right (opens h + m fields, prefilled unless the timer ran over 24 h,
@@ -153,9 +157,14 @@ study-timer chip and its dot, plan marks, progress) — screenshots catch them m
 - **Player** — Netflix feel: dark, immersive, bottom gradient chrome that fades 2.5 s after the last
   move while playing, accent played-range, centre pulse on click.
 - **30-day chart** — single series ⇒ no legend; bars ≤ 20 px wide with a 4 px rounded top, square at the
-  baseline; today in `accent`, other days `chart-bar`; one 1 px `ink-subtle` average line labelled at
-  its right end, in an 80 px gutter outside the plot (never over the bars); per-bar hover/focus tooltip
-  "Tue 29 Sep · 1h 12m"; a visually-hidden table carries every value.
+  baseline. v4: a day at or over her daily goal (`JourneyStatus.dailyGoalMinutes`, 2.5 h) is `accent` with
+  a small accent ✓ (8 px phone / 12 px) 4 px above its bar; every other day, today included, is
+  `chart-bar` — no goal line, no "x min left", nothing marks a short day; today keeps its "Today" axis
+  label. No goal known (an older JS Journey, not connected): no goal visuals at all, today in `accent` (v3).
+  One 1 px `ink-subtle` average line labelled "avg 2h 5m" at its right end, in an 80 px gutter outside the
+  plot (never over the bars) — the average since she STARTED over plan study days (`lib/stats.ts`
+  studyAverage), never the mean of the 30 bars; per-bar hover/focus tooltip "Tue 29 Sep · 1h 12m"; a
+  visually-hidden table carries every value ("· daily goal met" on those days).
 
 ## Traps (found in QA)
 

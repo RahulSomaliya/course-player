@@ -54,6 +54,12 @@ export function formatShortDate(key: string): string {
   return `${day} ${month}`;
 }
 
+/** A section by its number, as every user-facing line prints it: 9 -> "09". Never "§09" — Rahul, v4
+ *  (2026-10-12): the "§" read as noise in both apps. Mirror of JS Journey lib/format.ts sectionTag. */
+export function sectionNumberLabel(sectionNumber: number): string {
+  return String(sectionNumber).padStart(2, '0');
+}
+
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }

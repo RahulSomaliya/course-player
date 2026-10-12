@@ -173,6 +173,42 @@ describe('validation', () => {
     expect(p([])).not.toBeNull();
   });
 
+  it('validateProgressSnapshot: doneLectures (v4) — JS Journey lib/player.ts parseDoneLectures cases, verbatim', () => {
+    const p = (doneLectures: unknown): string | null => validateProgressSnapshot({ ...snapshot(1), doneLectures }, 'react-2023');
+    // optional: absent (an older player) or null = none
+    expect(validateProgressSnapshot(snapshot(1), 'react-2023')).toBeNull();
+    expect(p(null)).toBeNull();
+    // section number → ascending lecture numbers, kept as sent (04, a plan-skipped section, too; an empty list too)
+    expect(p({ '1': [1, 2, 3, 5], '4': [2], '7': [] })).toBeNull();
+    // a present-but-wrong value fails the snapshot
+    expect(p([])).toMatch(/doneLectures/);
+    expect(p({ '07': [1] })).toMatch(/doneLectures/);
+    expect(p({ abc: [1] })).toMatch(/doneLectures/);
+    expect(p({ '1': [0] })).toMatch(/doneLectures/);
+    expect(p({ '1': [1.5] })).toMatch(/doneLectures/);
+    expect(p({ '1': '1,2' })).toMatch(/doneLectures/);
+    expect(p({ '1': [2, 1] })).toMatch(/doneLectures/);
+    expect(p({ '1': [1, 1] })).toMatch(/doneLectures/);
+    // bounded: ≤ 1000 lecture numbers in all, each ≤ 1000
+    expect(p({ '1': Array.from({ length: 1001 }, (_, i) => i + 1) })).toMatch(/doneLectures/);
+    expect(p({ '1': [1_001] })).toMatch(/doneLectures/);
+    // JS Journey also refuses { '40': [1] } ("not a section of react-2023") — its curriculum; this check
+    // cannot know it (see isDoneLectures). The web only sends sections of the scanned course.
+  });
+
+  it('validateProgressSnapshot: doneLectures — the player\'s own edges around those rules', () => {
+    const p = (doneLectures: unknown): string | null => validateProgressSnapshot({ ...snapshot(1), doneLectures }, 'react-2023');
+    for (const key of ['0', '-1', '1.5', '', ' 7', '10000']) expect(p({ [key]: [1] }), key).toMatch(/doneLectures/);
+    expect(p({ '7': ['1'] })).toMatch(/doneLectures/);
+    expect(p({ '7': [1000] })).toBeNull();
+    // the TOTAL is capped, not each section: 600 + 400 fits, 600 + 401 does not
+    expect(p({ '1': Array.from({ length: 600 }, (_, i) => i + 1), '2': Array.from({ length: 400 }, (_, i) => i + 1) })).toBeNull();
+    expect(p({ '1': Array.from({ length: 600 }, (_, i) => i + 1), '2': Array.from({ length: 401 }, (_, i) => i + 1) })).toMatch(/doneLectures/);
+    expect(p(Object.fromEntries(Array.from({ length: 201 }, (_, i) => [String(i + 1), []])))).toMatch(/doneLectures/); // > 200 sections
+    // inside an update's progress too (the local server refuses the update before it is queued)
+    expect(validateSession(session('s-1', { progress: { ...snapshot(1), doneLectures: { '7': [3, 2] } } }), 'react-2023')).toMatch(/progress: doneLectures/);
+  });
+
   it('parseReadIds wants 1–500 message ids — uuids, as JS Journey checks — and dedups them', () => {
     expect(parseReadIds({ ids: [M_REPLY, M_NOTE, M_REPLY] })).toEqual({ ok: true, ids: [M_REPLY, M_NOTE] });
     for (const bad of [null, {}, { ids: [] }, { ids: M_REPLY }, { ids: [''] }, { ids: [7] }, { ids: ['r-wed'] }, { ids: [M_REPLY, 'x'.repeat(36)] }]) {
@@ -223,6 +259,42 @@ describe('validation', () => {
     expect(parseJourneyStatus({ ...status, planBreak: { ...diwali, start: '1 Nov' } })).toBeNull();
     expect(parseJourneyStatus({ ...status, planBreak: { ...diwali, end: undefined } })).toBeNull();
     expect(parseJourneyStatus({ ...status, planBreak: { ...diwali, start: '2026-11-16' } })).toBeNull(); // ends before it starts
+  });
+
+  it('parseJourneyStatus keeps the v4 fields (startDate, dailyGoalMinutes, projection) when well-formed', () => {
+    const projection = { finish: '2026-11-27', studyDaysLeft: 30, minutesPerStudyDay: 85.4, vsTarget: 20 };
+    const v4 = { ...status, startDate: '2026-10-05', dailyGoalMinutes: 150, projection };
+    expect(parseJourneyStatus(v4)).toEqual(v4);
+    expect(parseJourneyStatus({ ...v4, projection: null })).toEqual({ ...v4, projection: null });
+    expect(parseJourneyStatus({ ...v4, projection: { ...projection, vsTarget: -12 } })?.projection?.vsTarget).toBe(-12);
+    // a JS Journey deployed before them: none of the three, the status itself unchanged
+    expect(parseJourneyStatus(status)).toEqual(status);
+    expect(parseJourneyStatus(status)).not.toHaveProperty('projection');
+  });
+
+  it('parseJourneyStatus drops a malformed v4 field on its own (display-only, like plan) — never the status', () => {
+    const projection = { finish: '2026-11-27', studyDaysLeft: 30, minutesPerStudyDay: 85, vsTarget: 20 };
+    const v4 = { ...status, startDate: '2026-10-05', dailyGoalMinutes: 150, projection };
+    const drops = (over: Record<string, unknown>, field: string): void => {
+      const parsed = parseJourneyStatus({ ...v4, ...over });
+      expect(parsed, JSON.stringify(over)).not.toBeNull();
+      expect(parsed, JSON.stringify(over)).not.toHaveProperty(field);
+      expect(parsed?.week).toBe(status.week);
+    };
+    drops({ startDate: '5 Oct' }, 'startDate');
+    drops({ startDate: 20261005 }, 'startDate');
+    drops({ dailyGoalMinutes: 0 }, 'dailyGoalMinutes');
+    drops({ dailyGoalMinutes: -150 }, 'dailyGoalMinutes');
+    drops({ dailyGoalMinutes: '150' }, 'dailyGoalMinutes');
+    drops({ dailyGoalMinutes: 1441 }, 'dailyGoalMinutes'); // more than a day
+    drops({ projection: 'soon' }, 'projection');
+    drops({ projection: { ...projection, finish: '27 Nov' } }, 'projection');
+    drops({ projection: { ...projection, studyDaysLeft: -1 } }, 'projection');
+    drops({ projection: { ...projection, studyDaysLeft: 2.5 } }, 'projection');
+    drops({ projection: { ...projection, minutesPerStudyDay: Number.NaN } }, 'projection');
+    drops({ projection: { ...projection, minutesPerStudyDay: -3 } }, 'projection');
+    drops({ projection: { ...projection, vsTarget: 1.5 } }, 'projection');
+    drops({ projection: { ...projection, vsTarget: undefined } }, 'projection');
   });
 
   it('isJourneyFeed checks updates, replies, notes, the unread count and the cursor', () => {
@@ -470,9 +542,9 @@ describe('status proxy + link check', () => {
 
   it('v3: passes the plan through, and drops (logged) a malformed plan without losing the status', async () => {
     const plan: PlanRow[] = [
-      { kind: 'week', week: 1, due: '2026-10-09', goal: '§3 A First Look at React', state: 'current' },
+      { kind: 'week', week: 1, due: '2026-10-09', goal: '03 A First Look at React', state: 'current' },
       { kind: 'break', label: 'Diwali', start: '2026-11-01', end: '2026-11-15', now: false },
-      { kind: 'week', week: 5, due: '2026-11-20', goal: 'Keep going: §29 …', state: 'upcoming' },
+      { kind: 'week', week: 5, due: '2026-11-20', goal: 'Keep going: 29 …', state: 'upcoming' },
     ];
     reply = () => ({ status: 200, body: { ...status, plan } });
     expect(await journey.status('mansi')).toEqual({ kind: 'status', status: { ...status, plan } });

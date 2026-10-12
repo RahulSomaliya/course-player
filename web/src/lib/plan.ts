@@ -1,7 +1,10 @@
 // Her whole plan (docs/spec-v3-study-timer.md A7): JourneyStatus.plan is exactly the coach page's rows
 // (JS Journey lib/journey-view.ts planRows), so she sees the plan Rahul sees. Same words as the coach
-// list (components/coach/plan-list.tsx there): ✓ for done, "This week", "Behind"; upcoming and past
-// "keep going" weeks are quiet. State is a mark or a word, never colour alone. Change both together.
+// list (components/coach/plan-list.tsx there): ✓ for done, "This week", "Behind"; upcoming and past weeks
+// are quiet. v4: "past" = a past week that is not done and NOT behind — a "keep going" week, or one whose
+// lecture content met its goal with a lecture left (week 1, 2026-10-12: it said "Behind" right under
+// "Ahead by 2 days") — never the word "Behind". State is a mark or a word, never colour alone. Change both
+// together.
 import type { PlanRow } from '../../../shared/types';
 import { addDays, isoWeekday } from './dates';
 import { formatDay, formatShortDate } from './format';
@@ -17,13 +20,13 @@ export type PlanRowView =
       mark: 'done' | 'current' | 'open';
       tag: 'This week' | 'Behind' | null;
       /** the state for a screen reader (the mark is aria-hidden) */
-      srState: 'done' | 'this week' | 'behind' | 'upcoming' | 'keep going';
+      srState: 'done' | 'this week' | 'behind' | 'upcoming' | 'past';
       /** upcoming / past weeks: recessive text */
       quiet: boolean;
     }
   | { kind: 'break'; key: string; title: string; tag: 'Now' | null; dates: string; detail: string };
 
-const SR_STATE = { done: 'done', current: 'this week', behind: 'behind', upcoming: 'upcoming', past: 'keep going' } as const;
+const SR_STATE = { done: 'done', current: 'this week', behind: 'behind', upcoming: 'upcoming', past: 'past' } as const;
 
 /** Study days in [start, end] on her plan's weekdays (ISO 1 = Mon … 7 = Sun). */
 function studyDaysIn(start: string, end: string, studyWeekdays: readonly number[]): number {
@@ -49,7 +52,9 @@ export function planView(rows: readonly PlanRow[], studyWeekdays: readonly numbe
       kind: 'week',
       key: `w${r.week}`,
       title: `Week ${r.week}`,
-      goal: r.goal,
+      // v4: "07 Thinking In React", never "§07" — JS Journey stops sending the "§" with v4, but the two apps
+      // ship separately, so a JS Journey still on v3 (or a status cached from it) is cleaned here.
+      goal: r.goal.replace(/§\s*/g, ''),
       due: formatDay(r.due),
       mark: r.state === 'done' ? 'done' : r.state === 'current' ? 'current' : 'open',
       tag: r.state === 'current' ? 'This week' : r.state === 'behind' ? 'Behind' : null,

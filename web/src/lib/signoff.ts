@@ -15,7 +15,7 @@ export interface SessionSummary {
   timer: string;
   /** "9:14 am", or "Mon 5 Oct, 9:14 am" when it started on another day */
   started: string;
-  /** "§07 Thinking In React - State Management"; null = no player time */
+  /** "07 Thinking In React - State Management"; null = no player time */
   section: string | null;
   lectures: { shown: string[]; more: number };
   /** the timer ran over 24 h (a forgotten timer): the card asks for the real time */

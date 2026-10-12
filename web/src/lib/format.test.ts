@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addDays, dayOfWeekLabel, daysBetween, localDateKey } from './dates';
-import { formatClock, formatDay, formatDuration, formatElapsed, formatMessageTime, formatShortDate, formatSpokenDuration, formatTimeOfDay } from './format';
+import { formatClock, formatDay, formatDuration, formatElapsed, formatMessageTime, formatShortDate, formatSpokenDuration, formatTimeOfDay, sectionNumberLabel } from './format';
 
 describe('localDateKey', () => {
   it('uses the local calendar, so a late-night session lands on the right day', () => {
@@ -90,5 +90,13 @@ describe('the study timer (header chip + sign-off card, spec v3 A4)', () => {
     expect(formatTimeOfDay(new Date(2026, 9, 5, 21, 5).getTime())).toBe('9:05 pm');
     expect(formatTimeOfDay(new Date(2026, 9, 5, 0, 0).getTime())).toBe('12:00 am');
     expect(formatTimeOfDay(new Date(2026, 9, 5, 12, 30).getTime())).toBe('12:30 pm');
+  });
+});
+
+describe('sectionNumberLabel (v4: "09", never "§09" — JS Journey lib/format.ts sectionTag prints the same)', () => {
+  it('pads to two digits, no section sign', () => {
+    expect(sectionNumberLabel(9)).toBe('09');
+    expect(sectionNumberLabel(12)).toBe('12');
+    expect(sectionNumberLabel(31)).toBe('31');
   });
 });

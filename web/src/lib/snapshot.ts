@@ -17,13 +17,20 @@ export function buildSnapshot(course: Course, index: CourseIndex, state: Progres
   let lecturesDone = 0;
   let videoSecondsDone = 0;
   const sectionsDone: number[] = [];
+  const doneLectures: Record<string, number[]> = {};
   for (const s of course.sections) {
+    const done = new Set<number>();
     for (const l of s.lectures) {
       if (!state.lectures[l.id]?.done) continue;
       lecturesDone++;
       videoSecondsDone += l.duration;
+      // a "00 …" file parses as lecture 0: both validators refuse < 1 and would drop the WHOLE snapshot
+      if (l.number >= 1) done.add(l.number);
     }
     if (isSectionDone(s, state.lectures)) sectionsDone.push(s.number);
+    // v4 (the coach page's week → section → lecture view): ascending + unique — the local server and JS
+    // Journey both refuse anything else (server/journey.ts validateProgressSnapshot); no empty lists.
+    if (done.size > 0) doneLectures[String(s.number)] = [...done].sort((a, b) => a - b);
   }
   const nextId = nextLecture(index, state);
   const ref = nextId === null ? undefined : index.byId.get(nextId);
@@ -43,6 +50,7 @@ export function buildSnapshot(course: Course, index: CourseIndex, state: Progres
     sectionsDone,
     current: ref ? { sectionNumber: ref.section.number, lectureNumber: ref.lecture.number, title: ref.lecture.title } : null,
     days,
+    doneLectures,
   };
 }
 

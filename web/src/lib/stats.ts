@@ -1,8 +1,9 @@
 // Home stats: Today, Streak, Complete and the 30-day series. (The 4th stat, Due, comes from her plan:
-// lib/week.ts dueStat — v2 removed the finish-date projection.)
+// lib/week.ts dueStat.)
 // MIRRORED in ~/Developer/js-journey lib/stats.ts (the coach view renders her numbers from the progress
-// snapshot): change the streak rule or the "<1%"/floor label in BOTH apps, or Rahul reads a different
-// number than she does. Both walk the plan calendar JourneyStatus carries (studyWeekdays + planBreaks).
+// snapshot): change the streak rule, the 30-day average (studyAverage), the daily goal (goalMet) or the
+// "<1%"/floor label in BOTH apps, or Rahul reads a different number than she does. All walk the plan
+// calendar JourneyStatus carries (studyWeekdays + planBreaks).
 import type { Course, JourneyStatus, LectureProgress } from '../../../shared/types';
 import { addDays, isoWeekday } from './dates';
 
@@ -78,12 +79,42 @@ export function completion(course: Course, lectures: Lectures): Completion {
   return { percent: total > 0 ? (doneSeconds / total) * 100 : 0, doneLectures, totalLectures: course.totals.lectures };
 }
 
-export function last30(days: Days, today: string): { days: { key: string; seconds: number }[]; average: number } {
+/** The 30-day chart's bars: 30 days ending today, oldest first, zeros filled. Its "avg" line is
+ *  studyAverage — never the mean of these 30 (v4: her 2 h a day in week 1 read "avg 24m"). */
+export function last30(days: Days, today: string): { key: string; seconds: number }[] {
   const out: { key: string; seconds: number }[] = [];
   for (let i = 29; i >= 0; i--) {
     const key = addDays(today, -i);
     out.push({ key, seconds: studiedOn(days, key) });
   }
-  const average = out.reduce((sum, d) => sum + d.seconds, 0) / out.length;
-  return { days: out, average };
+  return out;
+}
+
+/** The chart's "avg" (spec v4 "Chart + daily goal"): every second studied from the start through today ÷ the
+ *  plan STUDY days in that range. Weekend / break study adds to the total, never to the divisor; a missed
+ *  study day counts as a day; today counts as a day only once it has ≥ 5 min (its seconds always add).
+ *  `start` = JourneyStatus.startDate; null (no status, an older JS Journey) → her first day with ≥ 5 min.
+ *  Before the start, or nothing studied → 0. Never ÷ 0: only weekend study so far → the total over one day. */
+export function studyAverage(days: Days, today: string, cal: StudyCalendar, start: string | null): number {
+  const from =
+    start ??
+    Object.keys(days)
+      .filter((k) => studiedOn(days, k) >= STREAK_MIN_SECONDS)
+      .reduce<string | null>((a, k) => (a === null || k < a ? k : a), null);
+  if (from === null || today < from) return 0;
+  let total = 0;
+  for (const [key, seconds] of Object.entries(days)) if (key >= from && key <= today) total += seconds;
+  let studyDays = 0;
+  for (let day = from; day <= today; day = addDays(day, 1)) {
+    if (!isStudyDay(day, cal)) continue;
+    if (day === today && studiedOn(days, day) < STREAK_MIN_SECONDS) continue;
+    studyDays++;
+  }
+  return total / Math.max(1, studyDays);
+}
+
+/** A day at or over the plan's daily study minutes (JourneyStatus.dailyGoalMinutes; React: 150). No goal
+ *  known (an older JS Journey, not connected) → never met, and home shows no goal visuals at all. */
+export function goalMet(seconds: number, dailyGoalMinutes: number | undefined): boolean {
+  return dailyGoalMinutes !== undefined && dailyGoalMinutes > 0 && seconds >= dailyGoalMinutes * 60;
 }

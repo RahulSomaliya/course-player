@@ -128,7 +128,7 @@ describe('JourneyStore', () => {
   });
 
   it('a cached plan (See full plan) of the wrong shape is dropped — the rest of the status stays', () => {
-    const plan = [{ kind: 'week', week: 1, due: '2026-10-09', goal: '§7 Thinking In React', state: 'current' }];
+    const plan = [{ kind: 'week', week: 1, due: '2026-10-09', goal: '07 Thinking In React', state: 'current' }];
     const good = memoryStore({ 'cp:react-2023:mansi:status': JSON.stringify({ ...status, plan }) });
     expect(setup({ storage: good }).store.get().status?.plan).toEqual(plan);
     for (const bad of ['x', [{ kind: 'week', week: '1' }], [{ kind: 'month' }]]) {
@@ -136,6 +136,28 @@ describe('JourneyStore', () => {
       const cached = setup({ storage }).store.get().status;
       expect(cached?.week).toBe(1);
       expect(cached?.plan).toBeUndefined();
+    }
+  });
+
+  it('v4: a cached startDate / dailyGoalMinutes / projection is kept when well-formed, dropped on its own when not', () => {
+    const projection = { finish: '2026-11-27', studyDaysLeft: 30, minutesPerStudyDay: 85, vsTarget: 20 };
+    const v4 = { ...status, startDate: '2026-10-05', dailyGoalMinutes: 150, projection };
+    const good = memoryStore({ 'cp:react-2023:mansi:status': JSON.stringify(v4) });
+    expect(setup({ storage: good }).store.get().status).toEqual(v4);
+    const none = memoryStore({ 'cp:react-2023:mansi:status': JSON.stringify({ ...v4, projection: null }) });
+    expect(setup({ storage: none }).store.get().status?.projection).toBeNull();
+    const bad: [Record<string, unknown>, 'startDate' | 'dailyGoalMinutes' | 'projection'][] = [
+      [{ startDate: 5 }, 'startDate'],
+      [{ dailyGoalMinutes: '150' }, 'dailyGoalMinutes'],
+      [{ dailyGoalMinutes: 0 }, 'dailyGoalMinutes'],
+      [{ projection: { finish: '2026-11-27' } }, 'projection'],
+      [{ projection: 'soon' }, 'projection'],
+    ];
+    for (const [over, field] of bad) {
+      const storage = memoryStore({ 'cp:react-2023:mansi:status': JSON.stringify({ ...v4, ...over }) });
+      const cached = setup({ storage }).store.get().status;
+      expect(cached?.week, field).toBe(1);
+      expect(cached, field).not.toHaveProperty(field);
     }
   });
 

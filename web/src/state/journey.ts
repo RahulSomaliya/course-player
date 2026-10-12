@@ -10,7 +10,7 @@
 // - SnapshotPusher: PUTs her progress snapshot, ≤ 1 per 5 min on changes, at once on sign-off/Quit.
 // Everything goes through the local server (lib/api.ts), which holds the token and retries.
 import { createContext, useContext, useSyncExternalStore } from 'react';
-import type { JourneyFeed, JourneyProblem, JourneyStatus, OutboxState, OutboxUpdate, PlanRow, ProgressSnapshot } from '../../../shared/types';
+import type { JourneyFeed, JourneyProblem, JourneyStatus, OutboxState, OutboxUpdate, PaceProjection, PlanRow, ProgressSnapshot } from '../../../shared/types';
 import { ApiError } from '../lib/api';
 import { isJourneyFeed, readQueueAfter, shouldRefetch } from '../lib/feed';
 import { deliveryOf, type Delivery } from '../lib/outbox';
@@ -59,10 +59,11 @@ export interface JourneyStoreOptions {
 const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const isStrings = (x: unknown): x is string[] => Array.isArray(x) && x.every((v) => typeof v === 'string');
 
-/** A status cached before the plan calendar (studyWeekdays / planBreaks) existed lacks it; `plan` is
- *  checked on its own (fromCache). */
-type CachedStatus = Omit<JourneyStatus, 'studyWeekdays' | 'planBreaks' | 'plan'> &
-  Partial<Pick<JourneyStatus, 'studyWeekdays' | 'planBreaks'>> & { plan?: unknown };
+/** A status cached before the plan calendar (studyWeekdays / planBreaks) existed lacks it; `plan` and the
+ *  v4 fields are checked on their own (fromCache). */
+type V4Fields = 'startDate' | 'dailyGoalMinutes' | 'projection';
+type CachedStatus = Omit<JourneyStatus, 'studyWeekdays' | 'planBreaks' | 'plan' | V4Fields> &
+  Partial<Pick<JourneyStatus, 'studyWeekdays' | 'planBreaks'>> & { plan?: unknown } & Partial<Record<V4Fields, unknown>>;
 
 const isBreak = (b: unknown): boolean =>
   isRecord(b) && typeof b.label === 'string' && typeof b.start === 'string' && typeof b.end === 'string';
@@ -97,10 +98,32 @@ function isPlanRow(x: unknown): x is PlanRow {
  *  shape is dropped on its own (it only feeds "See full plan", which hides without it). */
 function fromCache(s: CachedStatus | null): JourneyStatus | null {
   if (s === null) return null;
-  const { plan, ...rest } = s;
+  const { plan, startDate, dailyGoalMinutes, projection, ...rest } = s;
   const okPlan = Array.isArray(plan) && plan.every(isPlanRow) ? { plan } : {};
-  return { ...rest, ...okPlan, studyWeekdays: s.studyWeekdays ?? [...DEFAULT_CALENDAR.studyWeekdays], planBreaks: s.planBreaks ?? [] };
+  return {
+    ...rest,
+    ...okPlan,
+    // v4, display-only: a wrong shape drops that field alone (server/journey.ts v4Fields checks the live copy)
+    ...(isDay(startDate) ? { startDate } : {}),
+    ...(isGoalMinutes(dailyGoalMinutes) ? { dailyGoalMinutes } : {}),
+    ...(projection !== undefined && isProjection(projection) ? { projection } : {}),
+    studyWeekdays: s.studyWeekdays ?? [...DEFAULT_CALENDAR.studyWeekdays],
+    planBreaks: s.planBreaks ?? [],
+  };
 }
+
+const isDay = (x: unknown): x is string => isStr(x) && /^\d{4}-\d{2}-\d{2}$/.test(x);
+const isGoalMinutes = (x: unknown): x is number => Number.isInteger(x) && (x as number) >= 1 && (x as number) <= 1440;
+const isProjection = (x: unknown): x is PaceProjection | null =>
+  x === null ||
+  (isRecord(x) &&
+    isDay(x.finish) &&
+    Number.isInteger(x.studyDaysLeft) &&
+    (x.studyDaysLeft as number) >= 0 &&
+    typeof x.minutesPerStudyDay === 'number' &&
+    Number.isFinite(x.minutesPerStudyDay) &&
+    x.minutesPerStudyDay >= 0 &&
+    Number.isInteger(x.vsTarget));
 
 export class JourneyStore {
   private state: JourneyState;

@@ -9,7 +9,7 @@ import { CircleAlert, Clock3 } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { CoachMessage, StudentUpdate } from '../../../../shared/types';
 import { useApp } from '../../app/context';
-import { formatDay, formatDuration, formatMessageTime, plural } from '../../lib/format';
+import { formatDay, formatDuration, formatMessageTime, plural, sectionNumberLabel } from '../../lib/format';
 import { asStudentUpdate, readableReason, type WaitingUpdate } from '../../lib/outbox';
 import { useJourneyStore } from '../../state/journey';
 
@@ -28,7 +28,7 @@ interface Props {
 export function UpdateItem({ update, today, readIds, unreadAbove = false, status }: Props) {
   const facts = [
     update.minutes > 0 ? formatDuration(update.minutes * 60) : 'Note',
-    update.sectionNumber !== null ? `§${String(update.sectionNumber).padStart(2, '0')}${update.sectionTitle ? ` ${update.sectionTitle}` : ''}` : null,
+    update.sectionNumber !== null ? `${sectionNumberLabel(update.sectionNumber)}${update.sectionTitle ? ` ${update.sectionTitle}` : ''}` : null,
     update.lectures.length > 0 ? plural(update.lectures.length, 'lecture') : null,
   ].filter(Boolean);
   return (

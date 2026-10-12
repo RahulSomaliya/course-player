@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { indexCourse } from './course';
 import { SNAPSHOT_DAYS, SNAPSHOT_EVERY_MS, buildSnapshot, nextPushDelay } from './snapshot';
-import { progressWith, sampleCourse } from './test-fixtures';
+import { course, progressWith, sampleCourse, section } from './test-fixtures';
 
 const c = sampleCourse(); // 01: 3×600 s · 02 (Part 1): 60 s video + article · 03: 2×1200 s
 const idx = indexCourse(c);
@@ -21,6 +21,7 @@ describe('buildSnapshot (the coach sees exactly her numbers)', () => {
       sectionsDone: [],
       current: { sectionNumber: 1, lectureNumber: 1, title: 'Intro' },
       days: {},
+      doneLectures: {},
     });
   });
 
@@ -41,6 +42,30 @@ describe('buildSnapshot (the coach sees exactly her numbers)', () => {
     expect(s.sectionsDone).toEqual([1]);
     expect(s.current).toEqual({ sectionNumber: 3, lectureNumber: 1, title: 'Props' });
     expect(s.days).toEqual({ '2026-10-01': 1800 });
+    // v4: the coach page's week → section → lecture view — every kind, only sections with a done one
+    expect(s.doneLectures).toEqual({ '1': [1, 2, 3], '2': [2] });
+  });
+
+  it('doneLectures: section number → ascending unique lecture numbers (the coach view reads it)', () => {
+    const p = progressWith({ [id(6)]: { done: true }, [id(5)]: { done: true }, [id(1)]: { done: true }, [id(2)]: { pos: 30 } });
+    expect(buildSnapshot(c, idx, p, NOW).doneLectures).toEqual({ '1': [2], '3': [1, 2] });
+    // two files with one number (a course folder quirk) still send the number once
+    const twin = course([section(5, 'Twins', [{ title: 'A' }, { title: 'B' }])]);
+    const [a, b] = twin.sections[0]?.lectures ?? [];
+    const dup = { ...twin, sections: twin.sections.map((s) => ({ ...s, lectures: s.lectures.map((l) => ({ ...l, number: 3 })) })) };
+    const both = progressWith({ [a?.id as string]: { done: true }, [b?.id as string]: { done: true } });
+    expect(buildSnapshot(dup, indexCourse(dup), both, NOW).doneLectures).toEqual({ '5': [3] });
+  });
+
+  // Review 2026-10-12: a file named "00 …" parses as lecture 0; both validators refuse < 1 and would drop
+  // the WHOLE snapshot (the coach's numbers stop updating). Lecture 0 is left out of doneLectures only.
+  it('doneLectures never carries a lecture number below 1 (it would sink the whole snapshot)', () => {
+    const zero = course([section(2, 'Zero', [{ title: 'Intro' }, { title: 'Next' }])]);
+    const z = { ...zero, sections: zero.sections.map((s) => ({ ...s, lectures: s.lectures.map((l, i) => ({ ...l, number: i })) })) };
+    const all = progressWith(Object.fromEntries(z.sections[0]!.lectures.map((l) => [l.id, { done: true }])));
+    const snap = buildSnapshot(z, indexCourse(z), all, NOW);
+    expect(snap.doneLectures).toEqual({ '2': [1] });
+    expect(snap.lecturesDone).toBe(2); // still counted as done everywhere else
   });
 
   it('keeps only the last 120 days of study time (whole seconds, no empty days)', () => {

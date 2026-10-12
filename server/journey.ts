@@ -49,6 +49,7 @@ import type {
   JourneyStatus,
   OutboxState,
   OutboxUpdate,
+  PaceProjection,
   PlanRow,
   ProgressSnapshot,
   StudentUpdate,
@@ -127,7 +128,38 @@ export function validateProgressSnapshot(x: unknown, courseId: string): string |
   if (!isRecord(x.days) || !Object.entries(x.days).every(([day, secs]) => isDay(day) && isCount(secs))) {
     return 'days must map YYYY-MM-DD to seconds';
   }
+  if (x.doneLectures !== undefined && x.doneLectures !== null && !isDoneLectures(x.doneLectures)) {
+    return `doneLectures must map section numbers to ascending lecture numbers from 1 to ${DONE_LECTURES_MAX} (at most ${DONE_LECTURES_MAX} in all)`;
+  }
   return null;
+}
+
+/** v4 snapshot bounds = JS Journey's (lib/player.ts DONE_LECTURES_MAX): lecture numbers 1–1000 and at most
+ *  1000 of them in all — far above the React course (31 sections, 410 lectures), so only garbage fails. */
+const DONE_SECTIONS_MAX = 200;
+const DONE_LECTURES_MAX = 1000;
+/** a section number as a key: canonical ("7", never "07" / "0" / "1.5"), 1–9999 */
+const SECTION_KEY_RE = /^[1-9]\d{0,3}$/;
+
+/** ProgressSnapshot.doneLectures (v4): section number -> its done lecture numbers, strictly ascending
+ *  (absent or null = none). The SAME rules as JS Journey (lib/player.ts parseDoneLectures, its cases copied
+ *  into journey.test.ts): a snapshot it 4xx's is dropped, and an update whose `progress` fails here is
+ *  refused before it is queued. The web builds this shape (web/src/lib/snapshot.ts buildSnapshot, never an
+ *  empty list). One gap, shared with sectionsDone: JS Journey also refuses a key that is not a section of
+ *  ITS curriculum — this check would need the course scan, and her update must never wait on that. */
+function isDoneLectures(x: unknown): boolean {
+  if (!isRecord(x)) return false;
+  const entries = Object.entries(x);
+  if (entries.length > DONE_SECTIONS_MAX) return false;
+  let total = 0;
+  for (const [key, list] of entries) {
+    if (!SECTION_KEY_RE.test(key) || !Array.isArray(list)) return false;
+    total += list.length;
+    if (total > DONE_LECTURES_MAX) return false;
+    const ok = list.every((n: unknown, i: number) => isInt(n, 1) && n <= DONE_LECTURES_MAX && (i === 0 || n > (list[i - 1] as number)));
+    if (!ok) return false;
+  }
+  return true;
 }
 
 /** null when `x` is a JourneySession for `courseId`, else the first problem. */
@@ -240,6 +272,26 @@ function isWireStatus(x: unknown): x is WireStatus {
   );
 }
 
+/** v4 status fields — display-only, so a malformed one is left OUT (like `plan`), never failing the
+ *  status: startDate (the 30-day average's start), dailyGoalMinutes (goal-met bars), projection (the
+ *  quiet line under This week). Keep in sync with shared/types.ts + JS Journey lib/player.ts. */
+const isGoalMinutes = (x: unknown): x is number => isInt(x, 1) && x <= MINUTES_MAX;
+const isProjection = (x: unknown): x is PaceProjection | null =>
+  x === null ||
+  (isRecord(x) &&
+    isDay(x.finish) &&
+    isInt(x.studyDaysLeft, 0) &&
+    isCount(x.minutesPerStudyDay) &&
+    Number.isInteger(x.vsTarget));
+type V4Fields = 'startDate' | 'dailyGoalMinutes' | 'projection';
+function v4Fields(x: Record<string, unknown>): Pick<JourneyStatus, V4Fields> {
+  return {
+    ...(isDay(x.startDate) ? { startDate: x.startDate } : {}),
+    ...(isGoalMinutes(x.dailyGoalMinutes) ? { dailyGoalMinutes: x.dailyGoalMinutes } : {}),
+    ...(x.projection !== undefined && isProjection(x.projection) ? { projection: x.projection } : {}),
+  };
+}
+
 const PLAN_STATES = new Set(['done', 'current', 'behind', 'upcoming', 'past']);
 const isPlanRow = (x: unknown): x is PlanRow =>
   isRecord(x) &&
@@ -254,9 +306,10 @@ const isPlan = (x: unknown): x is PlanRow[] => Array.isArray(x) && x.every(isPla
  *  status() logs the drop. */
 export function parseJourneyStatus(x: unknown): JourneyStatus | null {
   if (!isWireStatus(x)) return null;
-  const { plan, ...rest } = x;
+  const { plan, startDate: _start, dailyGoalMinutes: _goal, projection: _projection, ...rest } = x;
   return {
     ...rest,
+    ...v4Fields(x),
     planBreak: x.planBreak ?? null,
     sectionDue: x.sectionDue ?? {},
     skippedSections: x.skippedSections ?? [],
@@ -1083,6 +1136,11 @@ export class Journey {
       return none;
     }
     if (isRecord(body) && body.plan !== undefined && status.plan === undefined) log(`[journey] ${profile}: status plan has an unexpected shape — dropped`);
+    if (isRecord(body)) {
+      for (const field of ['startDate', 'dailyGoalMinutes', 'projection'] as const) {
+        if (body[field] !== undefined && status[field] === undefined) log(`[journey] ${profile}: status ${field} has an unexpected shape — dropped`);
+      }
+    }
     return { kind: 'status', status };
   }
 

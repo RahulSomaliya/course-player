@@ -137,6 +137,23 @@ export interface ProgressSnapshot {
   current: { sectionNumber: number; lectureNumber: number; title: string } | null;
   /** local date "YYYY-MM-DD" -> seconds studied; last 120 days at most */
   days: Record<string, number>;
+  /** v4: section number -> the lecture numbers she has done in it, ascending. The coach page's
+   *  week → section → lecture view reads it. Optional: an older player sends none. The web sends only
+   *  sections with at least one done lecture (web/src/lib/snapshot.ts); the server checks the shape
+   *  (server/journey.ts validateProgressSnapshot — JS Journey lib/player.ts parseDoneLectures' rules). */
+  doneLectures?: Record<string, number[]>;
+}
+
+/** v4: where her CURRENT pace lands (JourneyStatus.projection; JS Journey lib/status.ts computes it). */
+export interface PaceProjection {
+  /** the study day she finishes on at this pace, "YYYY-MM-DD" (breaks skipped) */
+  finish: string;
+  /** whole study days left at this pace */
+  studyDaysLeft: number;
+  /** lecture (video) minutes of COUNTED sections she covers per elapsed study day so far */
+  minutesPerStudyDay: number;
+  /** study days between finish and targetDate: + = before the target, - = after it */
+  vsTarget: number;
 }
 
 export interface JourneySession {
@@ -166,7 +183,8 @@ export interface JourneySession {
 
 export interface JourneyStatus {
   pace: 'ahead' | 'on-track' | 'behind';
-  /** study days ahead (+) or behind (-) the plan */
+  /** study days ahead (+) or behind (-) the plan. v4 (docs/spec-v4-pace-and-coach.md "Pace"): content
+   *  done vs the PRORATED plan (JS Journey lib/status.ts) — the player only prints it (lib/week.ts paceOf). */
   daysDelta: number;
   week: number;
   totalWeeks: number;
@@ -193,6 +211,16 @@ export interface JourneyStatus {
    *  has none (the "See full plan" toggle hides). A malformed plan is dropped by the server (logged), the
    *  rest of the status is kept. */
   plan?: PlanRow[];
+  // v4 (docs/spec-v4-pace-and-coach.md), all optional: a JS Journey deployed before them, or a status
+  // cached before them, has none. A malformed one is dropped by the server (logged), like `plan`.
+  /** the plan's first study day, "YYYY-MM-DD" (React: 2026-10-05) — where the 30-day average starts */
+  startDate?: string;
+  /** the plan's study minutes per study day (React: 150 = 2.5 h) — a day at or over it is "goal met".
+   *  Absent → no goal visuals at all (web/src/lib/stats.ts goalMet). */
+  dailyGoalMinutes?: number;
+  /** where her CURRENT pace lands; null until there is a snapshot, one full study week has elapsed and ≥ 2 study days had study.
+   *  The quiet line at the bottom of This week (web/src/lib/week.ts projectionLine); hidden when null. */
+  projection?: PaceProjection | null;
 }
 
 /** One row of her plan (JS Journey lib/journey-view.ts PlanRow — change both together). */
@@ -202,9 +230,12 @@ export type PlanRow =
       week: number;
       /** the Friday this week's goal is due, "YYYY-MM-DD" */
       due: string;
-      /** "§7 Thinking In React" or "Keep going: §29 …" */
+      /** "07 Thinking In React" or "Keep going: 29 …" (v4: no "§"; an older JS Journey's "§07 …" is
+       *  cleaned in web/src/lib/plan.ts planView) */
       goal: string;
-      /** past = a "keep going" week whose date passed with its section still open (not a miss) */
+      /** past = a past week that is not done and NOT behind (quiet, never "Behind"): a "keep going" week
+       *  whose date passed with its section still open, or (v4) one whose lecture content met its goal with
+       *  a lecture left — JS Journey lib/journey-view.ts planRows */
       state: 'done' | 'current' | 'behind' | 'upcoming' | 'past';
     }
   /** a plan break (Diwali), inclusive "YYYY-MM-DD"; now = today falls inside it */
