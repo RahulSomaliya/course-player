@@ -5,6 +5,9 @@
 // PUT progress. Fixture: a week of her updates (relative to today), 2 unread replies quoting her
 // notes, 1 unread standalone note, status with sectionDue / skippedSections / planBreak null.
 // The "diwali" variant sends the break (1–15 Nov 2026); QA fakes the browser clock into it.
+// v4 (docs/spec-v4-pace-and-coach.md): status carries startDate, dailyGoalMinutes (150 = 2.5 h — the
+// goal-met bars and "Daily goal met") and a projection (the line at the bottom of This week); plan goals
+// read "07 …", never "§07 …".
 // v3 (docs/spec-v3-study-timer.md): status carries `plan` (the coach page's rows) + the plan calendar;
 // an unknown course answers 404 "unknown course" like JS Journey (the player matches that text); and
 // POST /__stub/reject {on: true} makes POST sessions refuse every update that way (the "Didn't reach
@@ -83,6 +86,11 @@ function status() {
     skippedSections: [4],
     studyWeekdays: [1, 2, 3, 4, 5],
     planBreaks: [{ label: 'Diwali break', ...DIWALI }],
+    // v4
+    startDate: '2026-10-05',
+    dailyGoalMinutes: 150,
+    // "At your pace — about 1h 31m of lectures a study day — you'll finish around Fri 11 Dec, 2 weeks before your target."
+    projection: { finish: '2026-12-11', studyDaysLeft: 38, minutesPerStudyDay: 91, vsTarget: 10 },
   };
   if (variant === 'diwali') {
     return {

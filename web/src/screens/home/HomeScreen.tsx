@@ -13,8 +13,7 @@ import { useJourney, useJourneyStore } from '../../state/journey';
 import { useProgress } from '../../state/progress';
 import { ContinueHero } from './ContinueHero';
 import { FromRahul } from './FromRahul';
-import { Stats } from './Stats';
-import { ThirtyDays } from './ThirtyDays';
+import { StudyNumbers } from './StudyNumbers';
 import { ThisWeek } from './ThisWeek';
 import { YourUpdates } from './YourUpdates';
 
@@ -45,10 +44,7 @@ export function HomeScreen() {
         <ContinueHero lecture={ref?.lecture ?? null} section={ref?.section ?? null} progress={nextId ? lectures[nextId] : undefined} fresh={!studiedAnything} />
         <div className="mt-12 space-y-12 md:mt-16 md:space-y-16">
           <ThisWeek status={journey.status} />
-          <div className="space-y-12">
-            <Stats status={journey.status} intro={playIntro} />
-            <ThirtyDays intro={playIntro} />
-          </div>
+          <StudyNumbers status={journey.status} intro={playIntro} />
           <YourUpdates feed={journey.feed} readIds={journey.readIds} stale={journey.stale} outbox={journey.outbox} />
           <section aria-labelledby="content-title">
             <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-line pb-4">

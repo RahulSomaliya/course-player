@@ -1,5 +1,5 @@
 // Primitives shared by every screen. Token classes only (docs/design.md) — no raw colours here.
-import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type AnchorHTMLAttributes, type ButtonHTMLAttributes, type ReactNode, type RefObject } from 'react';
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type AnchorHTMLAttributes, type ButtonHTMLAttributes, type CSSProperties, type ReactNode, type RefObject } from 'react';
 
 type Variant = 'primary' | 'secondary' | 'ghost';
 type Size = 'sm' | 'md' | 'lg';
@@ -143,6 +143,40 @@ export function QuietCheck({ done, className = 'size-4' }: { done: boolean; clas
         strokeLinecap="round"
         strokeLinejoin="round"
         className={`stroke-accent ${drawn ? 'animate-draw' : ''}`}
+      />
+    </svg>
+  );
+}
+
+/** v4: the daily goal's small accent ✓ — the Today stat's "Daily goal met" and above every goal-met bar
+ *  (docs/spec-v4-pace-and-coach.md "Chart + daily goal"). Static, except in the once-a-day goal moment
+ *  (lib/goal-moment.ts): `draw` = it draws in, held at its first frame while `hold` (not in view yet,
+ *  lib/motion.ts useSeenOnce). Never a colour transition — screenshots catch them mid-fade (docs/design.md). */
+export function GoalCheck({
+  draw = false,
+  hold = false,
+  delayMs,
+  className = 'size-4',
+  style,
+}: {
+  draw?: boolean;
+  hold?: boolean;
+  delayMs?: number;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  return (
+    <svg data-goal-check viewBox="0 0 18 18" className={`shrink-0 ${className}`} style={style} aria-hidden="true">
+      <path
+        d={TICK}
+        pathLength={1}
+        strokeDasharray="1"
+        fill="none"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={`stroke-accent ${draw ? 'animate-draw' : ''}`}
+        style={draw ? { animationDelay: delayMs === undefined ? undefined : `${delayMs}ms`, animationPlayState: hold ? 'paused' : undefined } : undefined}
       />
     </svg>
   );
