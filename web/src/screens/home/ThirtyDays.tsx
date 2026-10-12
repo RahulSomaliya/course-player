@@ -54,6 +54,10 @@ export function ThirtyDays({ status, days, today, intro, moment }: Props) {
   const plot = useRef<HTMLDivElement>(null);
   const play = useSeenOnce(plot, intro);
   const momentSeen = useSeenOnce(plot, moment);
+  // `intro` stays true for this whole mount: a moment already there at the first paint rides the intro's
+  // rise; one that comes LATER (crossed live while home is open) must not — its bar would keep the
+  // finished bar-rise and never lift, and its new ✓ would wait on the intro's 0.9 s of delays
+  const [momentAtFirstPaint] = useState(() => intro && moment);
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>): void => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return;
@@ -99,27 +103,28 @@ export function ThirtyDays({ status, days, today, intro, moment }: Props) {
               // goal-met days are the accent; without a goal, today is (v3) — never a colour transition
               const accent = goal === undefined ? isToday : met;
               const rising = moment && isToday && met;
+              // the goal moment's own lift — except at the first paint, where the bar rises anyway (bar-rise)
+              const lifting = rising && !momentAtFirstPaint;
               const h = d.seconds > 0 ? Math.max(pct(d.seconds), 1.5) : 0;
               const fill = accent ? (isActive ? 'bg-accent-hover' : 'bg-accent') : isActive ? 'bg-chart-bar-hover' : 'bg-chart-bar';
-              // the first-paint rise wins when both play: the bar rises anyway, the ✓ still draws in
-              const motion = intro ? 'animate-bar-rise' : rising ? 'animate-goal-rise' : '';
+              const motion = lifting ? 'animate-goal-rise' : intro ? 'animate-bar-rise' : '';
               return (
                 <div key={d.key} data-day={d.key} className="relative flex h-full flex-1 items-end justify-center" onPointerEnter={() => setActive(i)}>
                   {met && (
                     // first paint: the ✓ arrives (from 40 %) as its bar rises into place, never floating alone
                     <span
-                      className={`absolute left-1/2 -translate-x-1/2 ${intro ? 'animate-arrive' : ''}`}
+                      className={`absolute left-1/2 -translate-x-1/2 ${intro && !lifting ? 'animate-arrive' : ''}`}
                       style={{
                         bottom: `calc(${Math.min(h, 100)}% + 4px)`,
-                        animationDelay: intro ? `${i * 12 + BAR_RISE_MS / 2}ms` : undefined,
-                        animationPlayState: intro && !play ? 'paused' : undefined,
+                        animationDelay: intro && !lifting ? `${i * 12 + BAR_RISE_MS / 2}ms` : undefined,
+                        animationPlayState: intro && !lifting && !play ? 'paused' : undefined,
                       }}
                     >
                       <GoalCheck
                         className="block size-2 sm:size-3"
                         draw={rising}
-                        hold={!momentSeen}
-                        delayMs={intro ? i * 12 + BAR_RISE_MS : MOMENT_CHECK_DELAY_MS}
+                        hold={lifting ? !momentSeen : !play}
+                        delayMs={lifting ? MOMENT_CHECK_DELAY_MS : i * 12 + BAR_RISE_MS}
                       />
                     </span>
                   )}
@@ -128,9 +133,9 @@ export function ThirtyDays({ status, days, today, intro, moment }: Props) {
                     className={`w-full max-w-5 origin-bottom rounded-t-sm ${fill} ${motion}`}
                     style={{
                       height: `${h}%`,
-                      animationDelay: intro ? `${i * 12}ms` : undefined,
+                      animationDelay: intro && !lifting ? `${i * 12}ms` : undefined,
                       // paused = held at the first keyframe (25 % / 82 %, `backwards`) until the chart is in view
-                      animationPlayState: (intro && !play) || (!intro && rising && !momentSeen) ? 'paused' : undefined,
+                      animationPlayState: (lifting ? !momentSeen : intro && !play) ? 'paused' : undefined,
                     }}
                   />
                 </div>

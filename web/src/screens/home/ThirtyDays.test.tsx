@@ -116,6 +116,30 @@ describe('Last 30 days (v4)', () => {
     expect(check(still, TODAY)?.querySelector('path')?.getAttribute('class')).not.toContain('animate-draw');
   });
 
+  it('crossed LIVE on the page\'s first home view (intro already played): the bar lifts with goal-rise, the ✓ draws at once — no intro delays', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const props = { status, today: TODAY, intro: true };
+    act(() => root?.render(createElement(ThirtyDays, { ...props, days: DAYS, moment: false })));
+    expect(bar(host, TODAY)).toContain('animate-bar-rise');
+    act(() => root?.render(createElement(ThirtyDays, { ...props, days: { ...DAYS, [TODAY]: 150 * 60 }, moment: true })));
+    expect(bar(host, TODAY)).toContain('animate-goal-rise');
+    expect(bar(host, TODAY)).not.toContain('animate-bar-rise');
+    expect(check(host, TODAY)?.parentElement?.getAttribute('class')).not.toContain('animate-arrive');
+    const path = check(host, TODAY)?.querySelector('path');
+    expect(path?.getAttribute('class')).toContain('animate-draw');
+    expect(path?.getAttribute('style')).toContain('animation-delay: 300ms');
+    // the days that met it before keep their first-paint look
+    expect(bar(host, '2026-10-07')).toContain('animate-bar-rise');
+  });
+
+  it('met at the first paint with the moment: the intro rise carries the bar, the ✓ draws once it has risen', () => {
+    const host = mount({ days: { ...DAYS, [TODAY]: 150 * 60 }, moment: true, intro: true });
+    expect(bar(host, TODAY)).toContain('animate-bar-rise');
+    expect(check(host, TODAY)?.querySelector('path')?.getAttribute('style')).toContain(`animation-delay: ${29 * 12 + 520}ms`);
+  });
+
   it('a screen reader hears which days met the goal (the ✓ is aria-hidden)', () => {
     const rows = [...mount({}).querySelectorAll('table tr')].map((r) => r.textContent ?? '');
     expect(rows.find((r) => r.startsWith('Wed 7 Oct'))).toBe('Wed 7 Oct3h · daily goal met');
