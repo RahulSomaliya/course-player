@@ -218,7 +218,7 @@ export interface JourneyStatus {
   /** the plan's study minutes per study day (React: 150 = 2.5 h) — a day at or over it is "goal met".
    *  Absent → no goal visuals at all (web/src/lib/stats.ts goalMet). */
   dailyGoalMinutes?: number;
-  /** where her CURRENT pace lands; null until there is a snapshot and ≥ 2 elapsed study days with study.
+  /** where her CURRENT pace lands; null until there is a snapshot, one full study week has elapsed and ≥ 2 study days had study.
    *  The quiet line at the bottom of This week (web/src/lib/week.ts projectionLine); hidden when null. */
   projection?: PaceProjection | null;
 }

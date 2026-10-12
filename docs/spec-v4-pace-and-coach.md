@@ -44,7 +44,7 @@ doneLectures?: Record<string, number[]>;
 startDate?: string;
 /** the plan's study minutes per study day (React: 150 = 2.5 h) — a day at or over it is "goal met" */
 dailyGoalMinutes?: number;
-/** where her CURRENT pace lands; null until there is a snapshot and ≥ 2 elapsed study days with study */
+/** where her CURRENT pace lands; null until there is a snapshot, one full study week has elapsed and ≥ 2 study days had study */
 projection?: {
   /** the study day she finishes on at this pace, "YYYY-MM-DD" (breaks skipped) */
   finish: string;
