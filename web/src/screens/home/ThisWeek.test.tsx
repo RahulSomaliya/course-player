@@ -9,10 +9,10 @@ import { ThisWeek } from './ThisWeek';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const plan: PlanRow[] = [
-  { kind: 'week', week: 1, due: '2026-10-09', goal: '§7 Thinking In React', state: 'done' },
-  { kind: 'week', week: 2, due: '2026-10-16', goal: '§8 Practice Project', state: 'current' },
+  { kind: 'week', week: 1, due: '2026-10-09', goal: '07 Thinking In React', state: 'done' },
+  { kind: 'week', week: 2, due: '2026-10-16', goal: '08 Practice Project', state: 'current' },
   { kind: 'break', label: 'Diwali', start: '2026-10-26', end: '2026-11-08', now: false },
-  { kind: 'week', week: 3, due: '2026-11-13', goal: '§9 How React Works', state: 'upcoming' },
+  { kind: 'week', week: 3, due: '2026-11-13', goal: '09 How React Works', state: 'upcoming' },
 ];
 const status: JourneyStatus = {
   pace: 'on-track',
@@ -63,7 +63,7 @@ describe('This week → See full plan', () => {
     expect(rows[1]).toContain('Fri 16 Oct');
     expect(rows[2]).toContain('Diwali break');
     expect(rows[2]).toContain('26 Oct – 8 Nov');
-    expect(rows[3]).toContain('§9 How React Works');
+    expect(rows[3]).toContain('09 How React Works');
   });
 
   it('no plan (an older JS Journey, or a status cached before it) → no toggle', () => {

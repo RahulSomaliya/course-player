@@ -529,9 +529,9 @@ describe('status proxy + link check', () => {
 
   it('v3: passes the plan through, and drops (logged) a malformed plan without losing the status', async () => {
     const plan: PlanRow[] = [
-      { kind: 'week', week: 1, due: '2026-10-09', goal: '§3 A First Look at React', state: 'current' },
+      { kind: 'week', week: 1, due: '2026-10-09', goal: '03 A First Look at React', state: 'current' },
       { kind: 'break', label: 'Diwali', start: '2026-11-01', end: '2026-11-15', now: false },
-      { kind: 'week', week: 5, due: '2026-11-20', goal: 'Keep going: §29 …', state: 'upcoming' },
+      { kind: 'week', week: 5, due: '2026-11-20', goal: 'Keep going: 29 …', state: 'upcoming' },
     ];
     reply = () => ({ status: 200, body: { ...status, plan } });
     expect(await journey.status('mansi')).toEqual({ kind: 'status', status: { ...status, plan } });

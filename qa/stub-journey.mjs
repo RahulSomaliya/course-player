@@ -68,7 +68,7 @@ function plan(current) {
     if (due > DIWALI.end && !rows.some((r) => r.kind === 'break')) rows.push({ kind: 'break', label: 'Diwali', ...DIWALI, now: variant === 'diwali' });
     const last = sections[sections.length - 1];
     const state = week < current ? 'done' : week === current ? 'current' : 'upcoming';
-    rows.push({ kind: 'week', week, due, goal: `§${last} ${SECTION_TITLES[last]}`, state });
+    rows.push({ kind: 'week', week, due, goal: `${String(last).padStart(2, '0')} ${SECTION_TITLES[last]}`, state });
   });
   return rows;
 }

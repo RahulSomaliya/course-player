@@ -115,7 +115,7 @@ study-timer chip and its dot, plan marks, progress) — screenshots catch them m
   Three states only (v2 dropped the partly-watched arc).
 - **Section row (closed)** — number (`ink-subtle`, tabular) · title · a quiet accent ✓ (no disc) when
   100 % done. Length and due date appear on hover/focus in one right-aligned column; the current section
-  shows its due date always and a dot on its part's hairline; a skipped section (her plan, §04) is
+  shows its due date always and a dot on its part's hairline; a skipped section (her plan, 04) is
   `ink-subtle` with "Skipped" — unless she finished it: finished wins (a ✓, never both). No progress
   bars, counts or "Optional" badges.
 - **Part header** — overline "PART 1" (`text-xs` caps, `ink-muted`) · title (`text-lg` 600) · quiet
@@ -141,7 +141,7 @@ study-timer chip and its dot, plan marks, progress) — screenshots catch them m
   place — the coach page's plan list in these tokens).
 - **#/updates** — every update + replies in the same layout, "Show more" pages with the feed cursor.
 - **Watch** — player + details left; the right sidebar (360 px) shows ONLY the current section: overline
-  "SECTION 07", title, due date, ‹ › to step sections, lectures, and "Next: §08 …" at the bottom.
+  "SECTION 07", title, due date, ‹ › to step sections, lectures, and "Next: 08 …" at the bottom.
   `T` = theatre.
 - **Sign-off card** — a dialog (max 512 px): "Nice work, Mansi"; a `sunken` panel with "**1h 23m** studied ·
   started 9:14 am" + a quiet "Edit time" right (opens h + m fields, prefilled unless the timer ran over 24 h,

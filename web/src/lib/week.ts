@@ -4,7 +4,7 @@
 // to keep, so both say "break" instead.
 import type { JourneyStatus } from '../../../shared/types';
 import { addDays } from './dates';
-import { formatDay } from './format';
+import { formatDay, sectionNumberLabel } from './format';
 
 export interface WeekView {
   week: string;
@@ -44,7 +44,7 @@ export function describeWeek(s: JourneyStatus, today: string): WeekView {
   const active = activeBreak(s, today);
   return {
     week: `Week ${s.week} of ${s.totalWeeks}`,
-    goal: s.goal ? { text: `Finish §${String(s.goal.sectionNumber).padStart(2, '0')} ${s.goal.title}`, due: formatDay(s.goal.due) } : null,
+    goal: s.goal ? { text: `Finish ${sectionNumberLabel(s.goal.sectionNumber)} ${s.goal.title}`, due: formatDay(s.goal.due) } : null,
     pace: active ? null : paceOf(s),
     onBreak: active ? { label: active.label, back: formatDay(addDays(active.end, 1)) } : null,
     upcomingBreak: brk !== null && brk.start > today ? `${brk.label} from ${formatDay(brk.start)} to ${formatDay(brk.end)}` : null,

@@ -131,8 +131,8 @@ describe('StudyController: the wall-clock study timer (spec v3 A3)', () => {
   it('the player records WHERE she studied — and no longer writes study days (only a sign-off does)', async () => {
     const { study, progress, play } = setup();
     study.startSession();
-    play(5, 90); // §03
-    play(0, 30); // §01
+    play(5, 90); // section 03
+    play(0, 30); // section 01
     expect(progress.get().days).toEqual({});
     const r = await study.signOff('id-1', answer({ minutes: 2 }));
     expect(r.ok && r.update.sectionNumber).toBe(3);

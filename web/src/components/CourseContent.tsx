@@ -2,7 +2,7 @@
 // "PART 1", title, quiet "4 projects", and their sections nested under a hairline, with the part's own
 // intro lectures as a collapsible "Part introduction" row. A closed section row is only number ·
 // title · a quiet ✓ when done; its length (and due date) show on hover/focus. The section she is in
-// carries a dot on the hairline and its due date; §04 (skipped by her plan) is dimmed. Lectures render
+// carries a dot on the hairline and its due date; 04 (skipped by her plan) is dimmed. Lectures render
 // only while their section is open. (The Watch sidebar is screens/watch/SectionPanel.tsx.)
 import { ChevronDown } from 'lucide-react';
 import { memo, useCallback, useState } from 'react';
@@ -113,7 +113,7 @@ const SectionRow = memo(function SectionRow({
     <div data-section={section.id} data-current={current ? 'true' : undefined} className="relative">
       {current && (
         // Centred on the part's 1 px hairline: −(group padding 12/16 px + 0.5 px + half the dot). A loose
-        // section (§01, a fresh learner's first) has no hairline: the dot sits in the gutter instead.
+        // section (01, a fresh learner's first) has no hairline: the dot sits in the gutter instead.
         <span
           aria-hidden="true"
           className={`absolute top-[21px] size-2 rounded-full bg-accent ${nested ? '-left-[16.5px] sm:-left-[20.5px]' : '-left-3'}`}

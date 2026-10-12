@@ -127,6 +127,9 @@ describe('Your updates: her updates still in the outbox (spec v3 A6)', () => {
     const { host } = mount({ outbox: [queued], feed });
     expect(host.querySelectorAll('article')).toHaveLength(1);
     expect(host.querySelector('[data-outbox]')).toBeNull();
+    // v4: the facts line names the section "03 Components", never "§03"
+    expect(host.querySelector('article header')?.textContent).toContain('1h 23m · 03 Components');
+    expect(host.textContent).not.toContain('§');
   });
 
   it('nothing anywhere → no block', () => {

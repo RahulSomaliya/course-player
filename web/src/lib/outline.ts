@@ -31,7 +31,7 @@ export type PlanDates = Pick<JourneyStatus, 'sectionDue' | 'skippedSections'> | 
 
 export interface SectionMeta {
   done: boolean;
-  /** her plan skips it (React: §04) and she has not finished it — dimmed, "Skipped" */
+  /** her plan skips it (React: 04) and she has not finished it — dimmed, "Skipped" */
   skipped: boolean;
   /** "due Fri 9 Oct"; null when unknown, skipped or already done */
   due: string | null;
@@ -62,9 +62,9 @@ export function sectionTitle(section: Section): string {
   return section.title;
 }
 
-/** "§08 Practice Project - Eat-'N-Split" · "Part 2 · Intermediate React" */
+/** "08 Practice Project - Eat-'N-Split" · "Part 2 · Intermediate React" (v4: never "§08") */
 export function sectionShortName(section: Section): string {
-  return section.part ? `Part ${section.part.number} · ${section.title}` : `§${section.id} ${section.title}`;
+  return section.part ? `Part ${section.part.number} · ${section.title}` : `${section.id} ${section.title}`;
 }
 
 export function sectionSteps(course: Course, sectionId: string): { prev: Section | null; next: Section | null } {

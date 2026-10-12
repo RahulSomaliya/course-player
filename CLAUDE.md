@@ -104,6 +104,10 @@ the JS Journey token. Clients get a status code + short message. Web shows calm 
   shown nor acknowledged); his notes sit in "Your updates" (`withNotes`: her web page marks a note read on
   sight, so it is lost here otherwise); the pace pill and the Due word come from `daysDelta` alone
   (`lib/week.ts` paceOf — a separate word map printed a bare "Behind"). Change both apps together.
+- No "§" anywhere she reads (Rahul, 2026-10-12): a section is "09", never "§09" — goal line, update
+  facts, sign-off summary, Watch "Next:", plan rows, course content. Numbers go through `lib/format.ts`
+  `sectionNumberLabel` (= JS Journey `lib/format.ts` `sectionTag`) or `section.id`; plan rows come from
+  JS Journey as text, and a pre-v4 one still says "§07" — `lib/plan.ts` planView strips it.
 - The streak counts STUDY days (`web/src/lib/stats.ts` `streak` = JS Journey `lib/stats.ts`, one test table): a
   calendar-day streak reset every weekend and all of Diwali (2026-10-01). It walks `JourneyStatus.studyWeekdays` +
   `planBreaks` (`studyCalendar`; a status cached before them is filled in `state/journey.ts`; no status → Mon–Fri);

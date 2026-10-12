@@ -49,7 +49,9 @@ export function planView(rows: readonly PlanRow[], studyWeekdays: readonly numbe
       kind: 'week',
       key: `w${r.week}`,
       title: `Week ${r.week}`,
-      goal: r.goal,
+      // v4: "07 Thinking In React", never "§07" — JS Journey stops sending the "§" with v4, but the two apps
+      // ship separately, so a JS Journey still on v3 (or a status cached from it) is cleaned here.
+      goal: r.goal.replace(/§\s*/g, ''),
       due: formatDay(r.due),
       mark: r.state === 'done' ? 'done' : r.state === 'current' ? 'current' : 'open',
       tag: r.state === 'current' ? 'This week' : r.state === 'behind' ? 'Behind' : null,

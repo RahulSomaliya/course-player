@@ -24,7 +24,7 @@ describe('describeWeek ("This week")', () => {
   it('week, goal and pace — not the course due date (the Due stat right below shows it)', () => {
     expect(describeWeek(status(), '2026-10-21')).toEqual({
       week: 'Week 3 of 10',
-      goal: { text: 'Finish §12 Effects and Data Fetching', due: 'Fri 23 Oct' },
+      goal: { text: 'Finish 12 Effects and Data Fetching', due: 'Fri 23 Oct' }, // v4: never "§12"
       pace: { label: 'On track', tone: 'good' },
       onBreak: null,
       upcomingBreak: null,

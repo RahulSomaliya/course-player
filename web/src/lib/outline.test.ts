@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildOutline, sectionMeta, sectionSteps, sectionTag, sectionTitle } from './outline';
+import { buildOutline, sectionMeta, sectionShortName, sectionSteps, sectionTag, sectionTitle } from './outline';
 import { course, progressWith, section } from './test-fixtures';
 
 const c = course([
@@ -18,7 +18,7 @@ const plan = { sectionDue: { '3': '2026-10-09', '4': '2026-10-09', '6': '2026-10
 describe('buildOutline (Parts are a real level above sections)', () => {
   it('loose sections before Part 1, then each part with its intro and its sections nested', () => {
     const o = buildOutline(c);
-    expect(o.map((n) => (n.kind === 'part' ? `part ${n.number}` : `§${n.section.id}`))).toEqual(['§01', 'part 1', 'part 2']);
+    expect(o.map((n) => (n.kind === 'part' ? `part ${n.number}` : n.section.id))).toEqual(['01', 'part 1', 'part 2']);
     const p1 = o[1];
     expect(p1).toMatchObject({ kind: 'part', number: 1, title: 'React Fundamentals', projects: 4 });
     if (p1?.kind !== 'part') throw new Error('part expected');
@@ -39,10 +39,10 @@ describe('sectionMeta (closed row: number · title · quiet ✓; the rest on hov
     const p = progressWith({ [s(3).lectures[0]!.id]: { done: true }, [s(3).lectures[1]!.id]: { done: true } });
     expect(sectionMeta(s(3), p.lectures, plan)).toMatchObject({ done: true, due: null });
   });
-  it('a section her plan skips (§04) is marked skipped, with no due date', () => {
+  it('a section her plan skips (04) is marked skipped, with no due date', () => {
     expect(sectionMeta(s(4), {}, plan)).toMatchObject({ skipped: true, due: null });
   });
-  // Review 2026-10-01: §04 finished anyway showed "Skipped" AND the done ✓, dimmed — two signals that
+  // Review 2026-10-01: 04 finished anyway showed "Skipped" AND the done ✓, dimmed — two signals that
   // contradict each other. Finished wins.
   it('a section her plan skips but she finished anyway is done, not skipped', () => {
     const p = progressWith(Object.fromEntries(s(4).lectures.map((l) => [l.id, { done: true }])));
@@ -62,6 +62,10 @@ describe('Watch sidebar: one section at a time', () => {
     expect(sectionTitle(s(3))).toBe('A First Look at React');
     expect(sectionTag(s(2))).toBe('Part 1 · Introduction');
     expect(sectionTitle(s(2))).toBe('React Fundamentals');
+  });
+  it('"Next:" names a section by its number, never "§08" (v4); a part by its title', () => {
+    expect(sectionShortName(s(3))).toBe('03 A First Look at React');
+    expect(sectionShortName(s(2))).toBe('Part 1 · React Fundamentals');
   });
   it('steps to the previous / next section in course order, part introductions included', () => {
     expect(sectionSteps(c, '03')).toEqual({ prev: s(2), next: s(4) });

@@ -263,7 +263,7 @@ async function storedSession(page) {
     return raw === null ? null : JSON.parse(raw);
   }, STUDY_KEY);
 }
-/** Puts 3 real §05 lectures (from /api/boot) and 50 min of §05 player time into the running session, then
+/** Puts 3 real section-05 lectures (from /api/boot) and 50 min of section-05 player time into the running session, then
  *  reloads — so the card's summary shows what a real session records (Rahul asked to see it, 2026-10-05). */
 async function withLectures(page) {
   await page.evaluate(async (k) => {
@@ -432,7 +432,7 @@ groups.flow = async () => {
     check('card: no time fields until she taps "Edit time"', !fieldsBefore && (await onTop(page, '[data-control="signoff-edit-time"]')), 'no fields; "Edit time" visible', { fieldsBefore }, 'card-summary-1440-light.png');
     const lectures = await page.$$eval('[role="dialog"] ul li', (ls) => ls.map((l) => l.textContent.trim()));
     const sectionLine = await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] p')].map((p) => p.textContent.trim()).find((t) => /lectures done/.test(t)));
-    check('card: the lectures she finished + the section are listed', lectures.length === 3 && /^3 lectures done · §05 /.test(sectionLine ?? ''), '3 titles, "3 lectures done · §05 …"', { lectures, sectionLine }, 'card-summary-1440-light.png');
+    check('card: the lectures she finished + the section are listed', lectures.length === 3 && /^3 lectures done · 05 /.test(sectionLine ?? ''), '3 titles, "3 lectures done · 05 …"', { lectures, sectionLine }, 'card-summary-1440-light.png');
     await shot(page, 'card-summary-1440-light.png', 'Sign-off card as she first sees it: "1h 23m studied · started …pm" (12 h), the lectures and section — the time is read-only, "Edit time" only if she wants', { mode: 'viewport' });
     await setTheme(page, 'dark');
     await setWidth(page, 390);
@@ -469,7 +469,7 @@ groups.flow = async () => {
 
     // 5. Send (edited 1h 10m, a note, a mood)
     await typeInto(page, 'input[aria-label="Minutes"]', '10');
-    const note = 'Finished §07 — derived state finally clicked. Still unsure when to lift state up vs keep it in the form; can we go over it on Friday?';
+    const note = 'Finished 07 — derived state finally clicked. Still unsure when to lift state up vs keep it in the form; can we go over it on Friday?';
     await typeNote(page, note);
     await pickMood(page, 'Good');
     await page.click('[data-control="signoff-primary"]');

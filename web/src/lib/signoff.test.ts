@@ -4,7 +4,7 @@ import { newSession, type StudySession } from './session';
 import { OVER_DAY, describeSession, parseTime, prefillTime, sentDetail, timeProblem } from './signoff';
 import { sampleCourse } from './test-fixtures';
 
-const c = sampleCourse(); // §01 Welcome · §02 Part 1 intro · §03 Components
+const c = sampleCourse(); // 01 Welcome · 02 Part 1 intro · 03 Components
 const START = new Date(2026, 9, 5, 9, 14).getTime(); // Mon 5 Oct, 9:14 am
 const session = (over: Partial<StudySession> = {}): StudySession => ({ ...newSession('s', START, false), ...over });
 const lectures = (n: number) => Array.from({ length: n }, (_, i) => ({ section: 3, lecture: i + 1, title: `Lecture ${i + 1}` }));
@@ -15,7 +15,7 @@ describe('describeSession (the top of the sign-off card, spec v3 A5)', () => {
     expect(describeSession(s, c, START + 83 * 60_000)).toEqual({
       timer: '1h 23m',
       started: '9:14 am',
-      section: '§03 Components',
+      section: '03 Components', // v4: no "§"
       lectures: { shown: ['Lecture 1', 'Lecture 2'], more: 0 },
       overDay: false,
     });
