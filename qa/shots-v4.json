@@ -1,0 +1,139 @@
+{
+ "title": "Pace & Coach QA",
+ "subtitle": "Course Player and JS Journey on pace-v4: Course Player in headless Chrome against the SSD course (read-only) and a stand-in JS Journey; JS Journey pages rendered from test data, no database.",
+ "meta": {
+  "Branch": "pace-v4 (both apps)",
+  "Tests": "522 app · 422 JS Journey",
+  "Checks": "65/65 passed",
+  "Date": "12 Oct 2026"
+ },
+ "groups": [
+  {
+   "name": "Course Player: This week and Today",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/a-met-1440-light.png",
+     "caption": "This week ends with the projection line (Wed 16 Dec, 1 week before target), no \"§\" in the goal line; Today shows ✓ Daily goal met",
+     "check": "pass",
+     "note": "10 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/a-met-390-dark.png",
+     "caption": "Phone width, dark: projection line wraps, small ✓s sit over goal-met bars, no sideways scroll",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/a-met-1440-dark.png",
+     "caption": "Dark, after reload: the met state is still shown",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/b-short-1440-light.png",
+     "caption": "Today under the goal: the number alone (45m), today's bar grey, no ✓",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/c-reduced-1440-dark.png",
+     "caption": "Reduced motion: the met state is simply there, nothing animates",
+     "check": "pass"
+    }
+   ]
+  },
+  {
+   "name": "Course Player: 30-day chart",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/a-met-390-light.png",
+     "caption": "Phone, light: goal-met days (5, 7, 9 Oct and today) are accent with a ✓; the 1 Oct pre-start day is grey; avg 2h 26m counts study days from the start only",
+     "check": "pass"
+    }
+   ]
+  },
+  {
+   "name": "Course Player: Watch",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/watch-1440-light.png",
+     "caption": "Watch screen and sidebar: no \"§\" in section names",
+     "check": "pass",
+     "note": "2 checks"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/watch-390-dark.png",
+     "caption": "Watch at phone width, dark: no \"§\", no sideways scroll",
+     "check": "pass"
+    }
+   ]
+  },
+  {
+   "name": "JS Journey /r: Her numbers",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/jj-r-numbers-1440-light.png",
+     "caption": "Projection line in her words (\"At her pace… she'll finish\"), goal-met bars with ✓, avg 2h 3m, Today under the goal shows the number alone",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/jj-r-numbers-390-dark.png",
+     "caption": "Same at phone width, dark",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/jj-m-today-met-1440-light.png",
+     "caption": "Today met (same page, stats swapped to met): ✓ beside the number and \"Daily goal met\"",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/jj-m-today-met-390-dark.png",
+     "caption": "Today met at phone width, dark",
+     "check": "pass"
+    }
+   ]
+  },
+  {
+   "name": "JS Journey /r: Plan",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/jj-r-plan-open-1440-light.png",
+     "caption": "Plan with Week 3 opened: Part 2 header, then sections, then lectures with ✓ for done and a dot for where she is; other weeks closed",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/jj-r-plan-open-390-dark.png",
+     "caption": "Same at phone width, dark",
+     "check": "pass"
+    }
+   ]
+  },
+  {
+   "name": "JS Journey /r and /m: full pages",
+   "shots": [
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/jj-r-page-1440-light.png",
+     "caption": "Whole /r: weeks all closed, History shows only the newest day with an \"Older updates\" button, \"Send Mansi a note\" is one folded button",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/jj-r-page-390-dark.png",
+     "caption": "Whole /r at phone width, dark",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/jj-m-page-1440-light.png",
+     "caption": "Whole /m home: chart goal-met visuals, Today stat, no \"§\"",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/jj-m-page-390-dark.png",
+     "caption": "/m home at phone width, dark",
+     "check": "pass"
+    },
+    {
+     "file": "/Users/rahulsomaliya/Developer/course-player/qa/out/v4/jj-m-numbers-390-dark.png",
+     "caption": "/m numbers and chart, phone, dark",
+     "check": "pass"
+    }
+   ]
+  }
+ ]
+}
