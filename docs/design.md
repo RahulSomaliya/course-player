@@ -135,7 +135,7 @@ study-timer chip and its dot, plan marks, progress) — screenshots catch them m
   `accent-ink`, his words big, each reply led by her quoted note, one secondary "Got it") · Continue hero
   (THE primary action) · **This week** (week, goal + due, pace pill — the course due date is the Due stat's
   alone; on a break the break replaces the pace; v4: a quiet last line `text-sm ink-muted`, "At your pace —
-  about 1h 25m of lectures a study day — you'll finish around **Fri 27 Nov**, 4 weeks before your target.",
+  about 1h 25m of lectures a study day — you’ll finish around **Fri 27 Nov**, 4 weeks before your target.",
   the date the one `ink` 600 word, hidden while JS Journey sends no projection) · 4 stats in a quiet row (Today · Streak · Complete · **Due**, no cards,
   hairline dividers; v4: Today at or over her daily goal adds a small accent ✓ + "Daily goal met" in
   `accent-ink` under the number — under it, the number alone) · 30-day bars · **Your updates** (latest 3, replies threaded under a hairline, "See

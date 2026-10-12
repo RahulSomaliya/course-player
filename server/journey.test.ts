@@ -173,26 +173,39 @@ describe('validation', () => {
     expect(p([])).not.toBeNull();
   });
 
-  it('validateProgressSnapshot: doneLectures (v4) is optional; keys are section numbers, values ascending unique lecture numbers, bounded', () => {
+  it('validateProgressSnapshot: doneLectures (v4) — JS Journey lib/player.ts parseDoneLectures cases, verbatim', () => {
     const p = (doneLectures: unknown): string | null => validateProgressSnapshot({ ...snapshot(1), doneLectures }, 'react-2023');
-    expect(validateProgressSnapshot(snapshot(1), 'react-2023')).toBeNull(); // an older player sends none
-    expect(p({})).toBeNull();
-    expect(p({ '1': [1, 2, 3], '7': [1], '31': [4, 9] })).toBeNull();
-    expect(p(null)).toMatch(/doneLectures/);
-    expect(p([[1, 2]])).toMatch(/doneLectures/);
-    for (const key of ['0', '07', '-1', '1.5', 'seven', '', ' 7', '10000']) expect(p({ [key]: [1] }), key).toMatch(/doneLectures/);
-    expect(p({ '7': [] })).toMatch(/doneLectures/); // the player never sends an empty list
-    expect(p({ '7': [2, 1] })).toMatch(/doneLectures/); // not ascending
-    expect(p({ '7': [1, 1] })).toMatch(/doneLectures/); // not unique
-    expect(p({ '7': [0, 1] })).toMatch(/doneLectures/); // lecture numbers start at 1
-    expect(p({ '7': [1, 2.5] })).toMatch(/doneLectures/);
+    // optional: absent (an older player) or null = none
+    expect(validateProgressSnapshot(snapshot(1), 'react-2023')).toBeNull();
+    expect(p(null)).toBeNull();
+    // section number → ascending lecture numbers, kept as sent (04, a plan-skipped section, too; an empty list too)
+    expect(p({ '1': [1, 2, 3, 5], '4': [2], '7': [] })).toBeNull();
+    // a present-but-wrong value fails the snapshot
+    expect(p([])).toMatch(/doneLectures/);
+    expect(p({ '07': [1] })).toMatch(/doneLectures/);
+    expect(p({ abc: [1] })).toMatch(/doneLectures/);
+    expect(p({ '1': [0] })).toMatch(/doneLectures/);
+    expect(p({ '1': [1.5] })).toMatch(/doneLectures/);
+    expect(p({ '1': '1,2' })).toMatch(/doneLectures/);
+    expect(p({ '1': [2, 1] })).toMatch(/doneLectures/);
+    expect(p({ '1': [1, 1] })).toMatch(/doneLectures/);
+    // bounded: ≤ 1000 lecture numbers in all, each ≤ 1000
+    expect(p({ '1': Array.from({ length: 1001 }, (_, i) => i + 1) })).toMatch(/doneLectures/);
+    expect(p({ '1': [1_001] })).toMatch(/doneLectures/);
+    // JS Journey also refuses { '40': [1] } ("not a section of react-2023") — its curriculum; this check
+    // cannot know it (see isDoneLectures). The web only sends sections of the scanned course.
+  });
+
+  it('validateProgressSnapshot: doneLectures — the player\'s own edges around those rules', () => {
+    const p = (doneLectures: unknown): string | null => validateProgressSnapshot({ ...snapshot(1), doneLectures }, 'react-2023');
+    for (const key of ['0', '-1', '1.5', '', ' 7', '10000']) expect(p({ [key]: [1] }), key).toMatch(/doneLectures/);
     expect(p({ '7': ['1'] })).toMatch(/doneLectures/);
-    expect(p({ '7': 1 })).toMatch(/doneLectures/);
-    expect(p({ '7': Array.from({ length: 1000 }, (_, i) => i + 1) })).toBeNull();
-    expect(p({ '7': Array.from({ length: 1001 }, (_, i) => i + 1) })).toMatch(/doneLectures/);
-    expect(p(Object.fromEntries(Array.from({ length: 200 }, (_, i) => [String(i + 1), [1]])))).toBeNull();
-    expect(p(Object.fromEntries(Array.from({ length: 201 }, (_, i) => [String(i + 1), [1]])))).toMatch(/doneLectures/);
-    // inside an update's progress too
+    expect(p({ '7': [1000] })).toBeNull();
+    // the TOTAL is capped, not each section: 600 + 400 fits, 600 + 401 does not
+    expect(p({ '1': Array.from({ length: 600 }, (_, i) => i + 1), '2': Array.from({ length: 400 }, (_, i) => i + 1) })).toBeNull();
+    expect(p({ '1': Array.from({ length: 600 }, (_, i) => i + 1), '2': Array.from({ length: 401 }, (_, i) => i + 1) })).toMatch(/doneLectures/);
+    expect(p(Object.fromEntries(Array.from({ length: 201 }, (_, i) => [String(i + 1), []])))).toMatch(/doneLectures/); // > 200 sections
+    // inside an update's progress too (the local server refuses the update before it is queued)
     expect(validateSession(session('s-1', { progress: { ...snapshot(1), doneLectures: { '7': [3, 2] } } }), 'react-2023')).toMatch(/progress: doneLectures/);
   });
 

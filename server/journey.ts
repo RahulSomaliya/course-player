@@ -128,34 +128,38 @@ export function validateProgressSnapshot(x: unknown, courseId: string): string |
   if (!isRecord(x.days) || !Object.entries(x.days).every(([day, secs]) => isDay(day) && isCount(secs))) {
     return 'days must map YYYY-MM-DD to seconds';
   }
-  if (x.doneLectures !== undefined && !isDoneLectures(x.doneLectures)) {
-    return `doneLectures must map section numbers to 1–${DONE_LECTURES_MAX} ascending lecture numbers (at most ${DONE_SECTIONS_MAX} sections)`;
+  if (x.doneLectures !== undefined && x.doneLectures !== null && !isDoneLectures(x.doneLectures)) {
+    return `doneLectures must map section numbers to ascending lecture numbers from 1 to ${DONE_LECTURES_MAX} (at most ${DONE_LECTURES_MAX} in all)`;
   }
   return null;
 }
 
-/** v4 snapshot bounds — far above the React course (31 sections, ≤ 40 lectures each), so only garbage fails. */
+/** v4 snapshot bounds = JS Journey's (lib/player.ts DONE_LECTURES_MAX): lecture numbers 1–1000 and at most
+ *  1000 of them in all — far above the React course (31 sections, 410 lectures), so only garbage fails. */
 const DONE_SECTIONS_MAX = 200;
 const DONE_LECTURES_MAX = 1000;
 /** a section number as a key: canonical ("7", never "07" / "0" / "1.5"), 1–9999 */
 const SECTION_KEY_RE = /^[1-9]\d{0,3}$/;
 
-/** ProgressSnapshot.doneLectures (v4): section number -> its done lecture numbers, ascending + unique,
- *  never empty. Kept at least as strict as JS Journey (lib/player.ts parseProgressSnapshot): a snapshot
- *  it 4xx's is dropped, and an update whose `progress` fails here is refused before it is queued. The web
- *  builds exactly this shape (web/src/lib/snapshot.ts buildSnapshot). */
+/** ProgressSnapshot.doneLectures (v4): section number -> its done lecture numbers, strictly ascending
+ *  (absent or null = none). The SAME rules as JS Journey (lib/player.ts parseDoneLectures, its cases copied
+ *  into journey.test.ts): a snapshot it 4xx's is dropped, and an update whose `progress` fails here is
+ *  refused before it is queued. The web builds this shape (web/src/lib/snapshot.ts buildSnapshot, never an
+ *  empty list). One gap, shared with sectionsDone: JS Journey also refuses a key that is not a section of
+ *  ITS curriculum — this check would need the course scan, and her update must never wait on that. */
 function isDoneLectures(x: unknown): boolean {
   if (!isRecord(x)) return false;
   const entries = Object.entries(x);
   if (entries.length > DONE_SECTIONS_MAX) return false;
-  return entries.every(
-    ([key, list]) =>
-      SECTION_KEY_RE.test(key) &&
-      Array.isArray(list) &&
-      list.length >= 1 &&
-      list.length <= DONE_LECTURES_MAX &&
-      list.every((n: unknown, i: number) => isInt(n, 1) && Number.isSafeInteger(n) && (i === 0 || n > (list[i - 1] as number))),
-  );
+  let total = 0;
+  for (const [key, list] of entries) {
+    if (!SECTION_KEY_RE.test(key) || !Array.isArray(list)) return false;
+    total += list.length;
+    if (total > DONE_LECTURES_MAX) return false;
+    const ok = list.every((n: unknown, i: number) => isInt(n, 1) && n <= DONE_LECTURES_MAX && (i === 0 || n > (list[i - 1] as number)));
+    if (!ok) return false;
+  }
+  return true;
 }
 
 /** null when `x` is a JourneySession for `courseId`, else the first problem. */

@@ -74,47 +74,51 @@ describe('dueStat (replaces the finish projection)', () => {
   });
 });
 
-// v4 (docs/spec-v4-pace-and-coach.md "Projection"): where her CURRENT pace lands, in words. SAME TABLE as
-// JS Journey lib/journey-view.ts (its coach line says "her" / "she'll") — change both together.
-// vsTarget is in study days (+ = before the target): |vsTarget| < 3 → "right around"; ≥ 5 → weeks
-// (5 study days a week, rounded); else days.
-const P = { finish: '2026-11-27', studyDaysLeft: 30, minutesPerStudyDay: 85 };
-const LEAD = "At your pace — about 1h 25m of lectures a study day — you'll finish around Fri 27 Nov";
-const PROJECTION_CASES: { name: string; minutes?: number; vsTarget: number; want: string }[] = [
-  { name: 'the spec example: 20 study days early → 4 weeks before', vsTarget: 20, want: `${LEAD}, 4 weeks before your target.` },
-  { name: 'right on it', vsTarget: 0, want: `${LEAD}, right around your target.` },
-  { name: '2 days early is still "right around"', vsTarget: 2, want: `${LEAD}, right around your target.` },
-  { name: '2 days late is still "right around"', vsTarget: -2, want: `${LEAD}, right around your target.` },
-  { name: '3 days early → days', vsTarget: 3, want: `${LEAD}, 3 days before your target.` },
-  { name: '4 days late → days', vsTarget: -4, want: `${LEAD}, 4 days after your target.` },
-  { name: '5 study days → 1 week', vsTarget: 5, want: `${LEAD}, 1 week before your target.` },
-  { name: '7 study days rounds to 1 week', vsTarget: -7, want: `${LEAD}, 1 week after your target.` },
-  { name: '8 study days rounds to 2 weeks', vsTarget: 8, want: `${LEAD}, 2 weeks before your target.` },
-  { name: 'the spec example after: 10 study days late → 2 weeks after', vsTarget: -10, want: `${LEAD}, 2 weeks after your target.` },
-  {
-    name: 'the rate in whole minutes, under an hour',
-    minutes: 42.4,
-    vsTarget: 0,
-    want: "At your pace — about 42m of lectures a study day — you'll finish around Fri 27 Nov, right around your target.",
-  },
-  {
-    name: 'a whole number of hours',
-    minutes: 120,
-    vsTarget: 0,
-    want: "At your pace — about 2h of lectures a study day — you'll finish around Fri 27 Nov, right around your target.",
-  },
+// v4 (docs/spec-v4-pace-and-coach.md "Projection"): where her CURRENT pace lands, in words. SAME TABLE,
+// VERBATIM, as JS Journey tests/journey-view.test.ts PROJECTION_CASES (its lib/journey-view.ts projectionLine;
+// the "her" rows are its coach page's — the player says "you"). Curly apostrophes ("you’ll"). vsTarget is in
+// study days (+ = before the target): |vsTarget| < 3 → "right around"; ≥ 5 → weeks (5 study days a week,
+// rounded); else days. Change both together.
+type Projection = { finish: string; studyDaysLeft: number; minutesPerStudyDay: number; vsTarget: number };
+const P = (vsTarget: number, minutesPerStudyDay = 85, finish = '2026-11-27'): Projection => ({ finish, studyDaysLeft: 30, minutesPerStudyDay, vsTarget });
+const PROJECTION_CASES: { name: string; p: Projection; who: 'you' | 'her'; want: string }[] = [
+  { name: 'weeks before (you)', p: P(20), who: 'you', want: 'At your pace — about 1h 25m of lectures a study day — you’ll finish around Fri 27 Nov, 4 weeks before your target.' },
+  { name: 'weeks before (her)', p: P(20), who: 'her', want: 'At her pace — about 1h 25m of lectures a study day — she’ll finish around Fri 27 Nov, 4 weeks before her target.' },
+  { name: 'on the target', p: P(0), who: 'you', want: 'At your pace — about 1h 25m of lectures a study day — you’ll finish around Fri 27 Nov, right around your target.' },
+  { name: '2 days early is "right around"', p: P(2), who: 'you', want: 'At your pace — about 1h 25m of lectures a study day — you’ll finish around Fri 27 Nov, right around your target.' },
+  { name: '2 days late is "right around"', p: P(-2), who: 'her', want: 'At her pace — about 1h 25m of lectures a study day — she’ll finish around Fri 27 Nov, right around her target.' },
+  { name: '3 days before', p: P(3), who: 'you', want: 'At your pace — about 1h 25m of lectures a study day — you’ll finish around Fri 27 Nov, 3 days before your target.' },
+  { name: '4 days after', p: P(-4), who: 'you', want: 'At your pace — about 1h 25m of lectures a study day — you’ll finish around Fri 27 Nov, 4 days after your target.' },
+  { name: '5 study days = 1 week after', p: P(-5), who: 'her', want: 'At her pace — about 1h 25m of lectures a study day — she’ll finish around Fri 27 Nov, 1 week after her target.' },
+  { name: '7 study days rounds to 1 week', p: P(7, 91, '2026-12-16'), who: 'her', want: 'At her pace — about 1h 31m of lectures a study day — she’ll finish around Wed 16 Dec, 1 week before her target.' },
+  { name: '12 study days rounds to 2 weeks', p: P(-12), who: 'you', want: 'At your pace — about 1h 25m of lectures a study day — you’ll finish around Fri 27 Nov, 2 weeks after your target.' },
+  { name: '13 study days rounds to 3 weeks', p: P(13), who: 'you', want: 'At your pace — about 1h 25m of lectures a study day — you’ll finish around Fri 27 Nov, 3 weeks before your target.' },
+  { name: 'under an hour a day', p: P(20, 45), who: 'you', want: 'At your pace — about 45m of lectures a study day — you’ll finish around Fri 27 Nov, 4 weeks before your target.' },
+  { name: 'a whole hour', p: P(20, 60), who: 'you', want: 'At your pace — about 1h of lectures a study day — you’ll finish around Fri 27 Nov, 4 weeks before your target.' },
 ];
+// the "her" rows (the coach page's): the player's line with her words swapped in
+const asHers = (you: string): string => you.replace('At your pace', 'At her pace').replace('you’ll', 'she’ll').replace('your target', 'her target');
 
 describe('projectionLine (the quiet line at the bottom of This week)', () => {
-  it.each(PROJECTION_CASES)('$name', ({ minutes, vsTarget, want }) => {
-    expect(projectionLine({ ...P, minutesPerStudyDay: minutes ?? P.minutesPerStudyDay, vsTarget })?.text).toBe(want);
+  it.each(PROJECTION_CASES)('$name', ({ p, who, want }) => {
+    const text = projectionLine(p)?.text ?? '';
+    expect(who === 'you' ? text : asHers(text)).toBe(want);
+  });
+  it('the example status JS Journey sends today: 1h 31m a day, Wed 16 Dec, 7 study days early → 1 week', () => {
+    expect(projectionLine({ finish: '2026-12-16', studyDaysLeft: 38, minutesPerStudyDay: 91, vsTarget: 7 })?.text).toBe(
+      'At your pace — about 1h 31m of lectures a study day — you’ll finish around Wed 16 Dec, 1 week before your target.',
+    );
+  });
+  it('the rate rounds like JS Journey fmtDur (whole minutes, never negative)', () => {
+    expect(projectionLine(P(0, 42.4))?.lead).toBe('At your pace — about 42m of lectures a study day — you’ll finish around ');
+    expect(projectionLine(P(0, 89.6))?.lead).toBe('At your pace — about 1h 30m of lectures a study day — you’ll finish around ');
   });
   it('splits around the date, so the date can be the one strong word', () => {
-    expect(projectionLine({ ...P, vsTarget: 20 })).toEqual({
-      lead: "At your pace — about 1h 25m of lectures a study day — you'll finish around ",
+    expect(projectionLine(P(20))).toEqual({
+      lead: 'At your pace — about 1h 25m of lectures a study day — you’ll finish around ',
       date: 'Fri 27 Nov',
       tail: ', 4 weeks before your target.',
-      text: `${LEAD}, 4 weeks before your target.`,
+      text: 'At your pace — about 1h 25m of lectures a study day — you’ll finish around Fri 27 Nov, 4 weeks before your target.',
     });
   });
   it('no projection yet (null), or a JS Journey without it (undefined) → no line', () => {

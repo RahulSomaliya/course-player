@@ -140,7 +140,7 @@ export interface ProgressSnapshot {
   /** v4: section number -> the lecture numbers she has done in it, ascending. The coach page's
    *  week → section → lecture view reads it. Optional: an older player sends none. The web sends only
    *  sections with at least one done lecture (web/src/lib/snapshot.ts); the server checks the shape
-   *  (server/journey.ts validateProgressSnapshot — at least as strict as JS Journey lib/player.ts). */
+   *  (server/journey.ts validateProgressSnapshot — JS Journey lib/player.ts parseDoneLectures' rules). */
   doneLectures?: Record<string, number[]>;
 }
 
@@ -233,7 +233,9 @@ export type PlanRow =
       /** "07 Thinking In React" or "Keep going: 29 …" (v4: no "§"; an older JS Journey's "§07 …" is
        *  cleaned in web/src/lib/plan.ts planView) */
       goal: string;
-      /** past = a "keep going" week whose date passed with its section still open (not a miss) */
+      /** past = a past week that is not done and NOT behind (quiet, never "Behind"): a "keep going" week
+       *  whose date passed with its section still open, or (v4) one whose lecture content met its goal with
+       *  a lecture left — JS Journey lib/journey-view.ts planRows */
       state: 'done' | 'current' | 'behind' | 'upcoming' | 'past';
     }
   /** a plan break (Diwali), inclusive "YYYY-MM-DD"; now = today falls inside it */

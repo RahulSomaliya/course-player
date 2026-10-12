@@ -89,8 +89,9 @@ function status() {
     // v4
     startDate: '2026-10-05',
     dailyGoalMinutes: 150,
-    // "At your pace — about 1h 31m of lectures a study day — you'll finish around Fri 11 Dec, 2 weeks before your target."
-    projection: { finish: '2026-12-11', studyDaysLeft: 38, minutesPerStudyDay: 91, vsTarget: 10 },
+    // = what JS Journey computed for her on Mon 12 Oct 2026 → "At your pace — about 1h 31m of lectures a study
+    // day — you’ll finish around Wed 16 Dec, 1 week before your target."
+    projection: { finish: '2026-12-16', studyDaysLeft: 38, minutesPerStudyDay: 91, vsTarget: 7 },
   };
   if (variant === 'diwali') {
     return {

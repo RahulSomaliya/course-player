@@ -18,7 +18,7 @@ describe('planView: her plan week by week (Home → This week → See full plan,
     expect(view[1]).toMatchObject({ mark: 'open', tag: 'Behind', srState: 'behind', quiet: false });
     expect(view[2]).toMatchObject({ mark: 'current', tag: 'This week', srState: 'this week', quiet: false });
     expect(view[4]).toMatchObject({ mark: 'open', tag: null, srState: 'upcoming', quiet: true });
-    expect(view[5]).toMatchObject({ goal: 'Keep going: 11 Custom Hooks', mark: 'open', tag: null, srState: 'keep going', quiet: true });
+    expect(view[5]).toMatchObject({ goal: 'Keep going: 11 Custom Hooks', mark: 'open', tag: null, srState: 'past', quiet: true });
   });
 
   it('the break sits in place: its dates and how many study days it takes off', () => {
@@ -32,6 +32,11 @@ describe('planView: her plan week by week (Home → This week → See full plan,
     });
     const now = planView([{ kind: 'break', label: 'Diwali', start: '2026-10-26', end: '2026-10-26', now: true }], [1, 2, 3, 4, 5]);
     expect(now[0]).toMatchObject({ tag: 'Now', detail: '1 study day off — every date here already skips it.' });
+  });
+
+  it('v4 "past" = a past week that is not done and NOT behind (week 1 with one article left): quiet, never "Behind"', () => {
+    const [w1] = planView([{ kind: 'week', week: 1, due: '2026-10-09', goal: '07 Thinking In React', state: 'past' }], [1, 2, 3, 4, 5]);
+    expect(w1).toMatchObject({ mark: 'open', tag: null, srState: 'past', quiet: true });
   });
 
   it('v4: no "§" — a JS Journey deployed before v4 still sends "§07 …"; the player prints "07 …"', () => {

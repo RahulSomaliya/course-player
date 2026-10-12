@@ -73,14 +73,15 @@ function studyDaysPhrase(n: number): string {
   return days(n);
 }
 
-/** "At your pace — about 1h 25m of lectures a study day — you'll finish around **Fri 27 Nov**, 4 weeks
+/** "At your pace — about 1h 25m of lectures a study day — you’ll finish around **Fri 27 Nov**, 4 weeks
  *  before your target." Split around the date (This week makes it the one strong word); null while JS
  *  Journey has no projection (no snapshot / < 2 study days yet) or predates it. Mirror of JS Journey
- *  lib/journey-view.ts (coach: "her" / "she'll"), one test table: change both together. */
+ *  lib/journey-view.ts projectionLine (coach: "her" / "she’ll"), one test table (its PROJECTION_CASES,
+ *  verbatim): change both together — curly apostrophe, rate rounded like its fmtDur. */
 export function projectionLine(p: PaceProjection | null | undefined): { lead: string; date: string; tail: string; text: string } | null {
   if (p === null || p === undefined) return null;
-  const rate = formatDuration(Math.max(1, Math.round(p.minutesPerStudyDay)) * 60);
-  const lead = `At your pace — about ${rate} of lectures a study day — you'll finish around `;
+  const rate = formatDuration(Math.max(0, Math.round(p.minutesPerStudyDay)) * 60);
+  const lead = `At your pace — about ${rate} of lectures a study day — you’ll finish around `;
   const date = formatDay(p.finish);
   const off = Math.abs(p.vsTarget);
   const tail =

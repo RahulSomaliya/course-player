@@ -75,13 +75,30 @@ describe('This week → See full plan', () => {
   });
 });
 
+describe('This week → See full plan: v4 "past" weeks', () => {
+  it('a quiet past week (not done, not behind) shows no "Behind" — Monday of week 2 said "Behind" under "Ahead by 2 days"', () => {
+    const host = mount({
+      ...status,
+      plan: [
+        { kind: 'week', week: 1, due: '2026-10-09', goal: '07 Thinking In React', state: 'past' },
+        { kind: 'week', week: 2, due: '2026-10-16', goal: '11 How React Works', state: 'current' },
+      ],
+    });
+    act(() => toggle(host)?.click());
+    const rows = [...host.querySelectorAll('[data-plan] > li')].map((li) => li.textContent ?? '');
+    expect(rows[0]).not.toContain('Behind');
+    expect(rows[0]).toContain('Week 1 — past');
+    expect(rows[1]).toContain('This week');
+  });
+});
+
 describe('This week → the projection line (v4)', () => {
   const projection = { finish: '2026-11-27', studyDaysLeft: 30, minutesPerStudyDay: 85, vsTarget: 20 };
   const line = (host: HTMLElement): HTMLElement | null => host.querySelector('[data-projection]');
 
   it('a quiet line at the bottom of the block, the finish date the one strong word', () => {
     const host = mount({ ...status, projection });
-    expect(line(host)?.textContent).toBe("At your pace — about 1h 25m of lectures a study day — you'll finish around Fri 27 Nov, 4 weeks before your target.");
+    expect(line(host)?.textContent).toBe('At your pace — about 1h 25m of lectures a study day — you’ll finish around Fri 27 Nov, 4 weeks before your target.');
     expect(line(host)?.querySelector('strong')?.textContent).toBe('Fri 27 Nov');
   });
 
