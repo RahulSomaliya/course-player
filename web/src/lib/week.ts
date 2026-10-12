@@ -1,10 +1,11 @@
 // "This week" + the Due stat, from JourneyStatus (docs/spec-v2-coaching.md "This week + stats").
-// Replaces v1's plan strip and the finish-date projection: the date that matters is her plan's
-// target (`targetDate`, "Fri 25 Dec"), not an estimate. During a plan break (Diwali) there is no pace
-// to keep, so both say "break" instead.
-import type { JourneyStatus } from '../../../shared/types';
+// The Due stat is her plan's target (`targetDate`, "Fri 25 Dec"). During a plan break (Diwali) there is
+// no pace to keep, so both say "break" instead. v4 (docs/spec-v4-pace-and-coach.md): JS Journey also
+// sends where her CURRENT pace lands (`projection`) — a quiet line at the bottom of This week
+// (projectionLine), never a second Due number.
+import type { JourneyStatus, PaceProjection } from '../../../shared/types';
 import { addDays } from './dates';
-import { formatDay, sectionNumberLabel } from './format';
+import { formatDay, formatDuration, sectionNumberLabel } from './format';
 
 export interface WeekView {
   week: string;
@@ -57,4 +58,32 @@ export function dueStat(s: JourneyStatus | null, today: string): { value: string
   if (s === null) return null;
   const active = activeBreak(s, today);
   return { value: formatDay(s.targetDate), hint: active ? active.label : paceOf(s).label };
+}
+
+/** study days in a plan week — the unit "≥ 5 study days → weeks" counts in (spec v4 "Projection") */
+const STUDY_DAYS_PER_WEEK = 5;
+/** |vsTarget| under this many study days reads "right around your target" */
+const AROUND_TARGET_DAYS = 3;
+
+function studyDaysPhrase(n: number): string {
+  if (n >= STUDY_DAYS_PER_WEEK) {
+    const weeks = Math.round(n / STUDY_DAYS_PER_WEEK);
+    return `${weeks} ${weeks === 1 ? 'week' : 'weeks'}`;
+  }
+  return days(n);
+}
+
+/** "At your pace — about 1h 25m of lectures a study day — you'll finish around **Fri 27 Nov**, 4 weeks
+ *  before your target." Split around the date (This week makes it the one strong word); null while JS
+ *  Journey has no projection (no snapshot / < 2 study days yet) or predates it. Mirror of JS Journey
+ *  lib/journey-view.ts (coach: "her" / "she'll"), one test table: change both together. */
+export function projectionLine(p: PaceProjection | null | undefined): { lead: string; date: string; tail: string; text: string } | null {
+  if (p === null || p === undefined) return null;
+  const rate = formatDuration(Math.max(1, Math.round(p.minutesPerStudyDay)) * 60);
+  const lead = `At your pace — about ${rate} of lectures a study day — you'll finish around `;
+  const date = formatDay(p.finish);
+  const off = Math.abs(p.vsTarget);
+  const tail =
+    off < AROUND_TARGET_DAYS ? ', right around your target.' : `, ${studyDaysPhrase(off)} ${p.vsTarget > 0 ? 'before' : 'after'} your target.`;
+  return { lead, date, tail, text: `${lead}${date}${tail}` };
 }

@@ -133,7 +133,9 @@ study-timer chip and its dot, plan marks, progress) — screenshots catch them m
 - **Home** — header · **From Rahul** (only when something is unread: a raised `surface` card, overline in
   `accent-ink`, his words big, each reply led by her quoted note, one secondary "Got it") · Continue hero
   (THE primary action) · **This week** (week, goal + due, pace pill — the course due date is the Due stat's
-  alone; on a break the break replaces the pace) · 4 stats in a quiet row (Today · Streak · Complete · **Due**, no cards,
+  alone; on a break the break replaces the pace; v4: a quiet last line `text-sm ink-muted`, "At your pace —
+  about 1h 25m of lectures a study day — you'll finish around **Fri 27 Nov**, 4 weeks before your target.",
+  the date the one `ink` 600 word, hidden while JS Journey sends no projection) · 4 stats in a quiet row (Today · Streak · Complete · **Due**, no cards,
   hairline dividers) · 30-day bars · **Your updates** (latest 3, replies threaded under a hairline, "See
   all"; a reply still unread is one quiet line "Rahul replied · above" — From Rahul shows it in full;
   updates still in the outbox on top: "Waiting to send" / "Didn't reach Rahul — reason · Try again")

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { JourneyStatus } from '../../../shared/types';
-import { describeWeek, dueStat } from './week';
+import { describeWeek, dueStat, projectionLine } from './week';
 
 const status = (over: Partial<JourneyStatus> = {}): JourneyStatus => ({
   pace: 'on-track',
@@ -71,5 +71,54 @@ describe('dueStat (replaces the finish projection)', () => {
   });
   it('no status (not connected, nothing cached) → omitted', () => {
     expect(dueStat(null, '2026-10-21')).toBeNull();
+  });
+});
+
+// v4 (docs/spec-v4-pace-and-coach.md "Projection"): where her CURRENT pace lands, in words. SAME TABLE as
+// JS Journey lib/journey-view.ts (its coach line says "her" / "she'll") — change both together.
+// vsTarget is in study days (+ = before the target): |vsTarget| < 3 → "right around"; ≥ 5 → weeks
+// (5 study days a week, rounded); else days.
+const P = { finish: '2026-11-27', studyDaysLeft: 30, minutesPerStudyDay: 85 };
+const LEAD = "At your pace — about 1h 25m of lectures a study day — you'll finish around Fri 27 Nov";
+const PROJECTION_CASES: { name: string; minutes?: number; vsTarget: number; want: string }[] = [
+  { name: 'the spec example: 20 study days early → 4 weeks before', vsTarget: 20, want: `${LEAD}, 4 weeks before your target.` },
+  { name: 'right on it', vsTarget: 0, want: `${LEAD}, right around your target.` },
+  { name: '2 days early is still "right around"', vsTarget: 2, want: `${LEAD}, right around your target.` },
+  { name: '2 days late is still "right around"', vsTarget: -2, want: `${LEAD}, right around your target.` },
+  { name: '3 days early → days', vsTarget: 3, want: `${LEAD}, 3 days before your target.` },
+  { name: '4 days late → days', vsTarget: -4, want: `${LEAD}, 4 days after your target.` },
+  { name: '5 study days → 1 week', vsTarget: 5, want: `${LEAD}, 1 week before your target.` },
+  { name: '7 study days rounds to 1 week', vsTarget: -7, want: `${LEAD}, 1 week after your target.` },
+  { name: '8 study days rounds to 2 weeks', vsTarget: 8, want: `${LEAD}, 2 weeks before your target.` },
+  { name: 'the spec example after: 10 study days late → 2 weeks after', vsTarget: -10, want: `${LEAD}, 2 weeks after your target.` },
+  {
+    name: 'the rate in whole minutes, under an hour',
+    minutes: 42.4,
+    vsTarget: 0,
+    want: "At your pace — about 42m of lectures a study day — you'll finish around Fri 27 Nov, right around your target.",
+  },
+  {
+    name: 'a whole number of hours',
+    minutes: 120,
+    vsTarget: 0,
+    want: "At your pace — about 2h of lectures a study day — you'll finish around Fri 27 Nov, right around your target.",
+  },
+];
+
+describe('projectionLine (the quiet line at the bottom of This week)', () => {
+  it.each(PROJECTION_CASES)('$name', ({ minutes, vsTarget, want }) => {
+    expect(projectionLine({ ...P, minutesPerStudyDay: minutes ?? P.minutesPerStudyDay, vsTarget })?.text).toBe(want);
+  });
+  it('splits around the date, so the date can be the one strong word', () => {
+    expect(projectionLine({ ...P, vsTarget: 20 })).toEqual({
+      lead: "At your pace — about 1h 25m of lectures a study day — you'll finish around ",
+      date: 'Fri 27 Nov',
+      tail: ', 4 weeks before your target.',
+      text: `${LEAD}, 4 weeks before your target.`,
+    });
+  });
+  it('no projection yet (null), or a JS Journey without it (undefined) → no line', () => {
+    expect(projectionLine(null)).toBeNull();
+    expect(projectionLine(undefined)).toBeNull();
   });
 });

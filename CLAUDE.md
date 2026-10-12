@@ -36,6 +36,7 @@ Design decisions: `docs/design.md`. First course: `/Volumes/Rahul's SSD/Courses/
 | "course not recognised" | `JourneyProblem` — 409 from status + connect; `ApiError.problem` in the web |
 | study timer (wall clock), Send, Discard, v2 → v3 migration | `web/src/state/study.ts` (+ `lib/session.ts`, `lib/legacy.ts`), `screens/SignOffCard.tsx`, `components/StudyTimer.tsx` (Start studying, chip, notice) |
 | feed, Got it, snapshot push | `web/src/state/journey.ts`, `web/src/lib/feed.ts` |
+| pace + projection ("At your pace … you'll finish around Fri 27 Nov") | JS Journey computes both (`lib/status.ts`); the player only prints them: `web/src/lib/week.ts` paceOf / projectionLine (= JS Journey `lib/journey-view.ts`, one test table) → `screens/home/ThisWeek.tsx` |
 | study time / stats | `ProgressState.days` written ONLY at sign-off (`lib/session.ts` `splitAcrossDays` → `lib/progress.ts` `withStudyDays`); running timer shown via `state/study.ts` `useStudyDays`; stats in `web/src/lib/stats.ts` |
 | player | `web/src/player/` |
 

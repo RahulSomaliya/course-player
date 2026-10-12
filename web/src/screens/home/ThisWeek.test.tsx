@@ -74,3 +74,21 @@ describe('This week → See full plan', () => {
     expect(toggle(mount({ ...status, plan: [] }))).toBeNull();
   });
 });
+
+describe('This week → the projection line (v4)', () => {
+  const projection = { finish: '2026-11-27', studyDaysLeft: 30, minutesPerStudyDay: 85, vsTarget: 20 };
+  const line = (host: HTMLElement): HTMLElement | null => host.querySelector('[data-projection]');
+
+  it('a quiet line at the bottom of the block, the finish date the one strong word', () => {
+    const host = mount({ ...status, projection });
+    expect(line(host)?.textContent).toBe("At your pace — about 1h 25m of lectures a study day — you'll finish around Fri 27 Nov, 4 weeks before your target.");
+    expect(line(host)?.querySelector('strong')?.textContent).toBe('Fri 27 Nov');
+  });
+
+  it('hidden while JS Journey has none (null) or predates it (absent)', () => {
+    expect(line(mount({ ...status, projection: null }))).toBeNull();
+    act(() => root?.unmount());
+    root = null;
+    expect(line(mount(status))).toBeNull();
+  });
+});
